@@ -13,7 +13,7 @@ if __name__ == '__main__':
     experiment_name = 'NoCost28Aug2024'
     num_episodes = 15
 
-    relative_folder_name = os.path.join('../smbrl/model_based_rl', experiment_name)
+    relative_folder_name = os.path.join('../saved_data', experiment_name)
 
     tasks_data = []
 

@@ -33,7 +33,7 @@ if __name__ == '__main__':
     task_titles = ['Swing Up']
     num_episodes = 16
 
-    relative_folder_name = os.path.join('../smbrl/model_based_rl', experiment_name)
+    relative_folder_name = os.path.join('../saved_data', experiment_name)
 
     tasks_data = []
 
