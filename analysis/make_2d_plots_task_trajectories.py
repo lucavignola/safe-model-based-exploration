@@ -8,10 +8,11 @@ from jax import vmap
 print(os.getcwd())
 
 if __name__ == '__main__':
-    # experiment_name = 'PendulumTesting28Aug2024'
-    # num_episodes = 6
-    experiment_name = 'NoCost28Aug2024'
+    experiment_name = 'Cost30Aug2024'
     num_episodes = 15
+
+    # experiment_name = 'NoCost28Aug2024'
+    # num_episodes = 15
 
     relative_folder_name = os.path.join('../saved_data', experiment_name)
 

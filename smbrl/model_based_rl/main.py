@@ -340,11 +340,12 @@ if __name__ == '__main__':
 
 
     icem_params = iCemParams(
-        num_particles=1,
+        num_particles=10,
         num_samples=500,
         alpha=0.2,
         num_steps=5,
         exponent=2,
+        lambda_constraint=1e6
     )
 
     agent = GPModelBasedAgent(
@@ -352,10 +353,10 @@ if __name__ == '__main__':
         gp_model=gp_model,
         episode_length=50,
         action_repeat=2,
-        cost_fn=None,
-        # cost_fn=VelocityBound(horizon=icem_horizon,
-        #                       max_abs_velocity=6.0 - 10 ** (-3),
-        #                       violation_eps=1e-3, ),
+        # cost_fn=None,
+        cost_fn=VelocityBound(horizon=icem_horizon,
+                              max_abs_velocity=6.0 - 10 ** (-3),
+                              violation_eps=1e-3, ),
         test_tasks=[Task(reward=PendulumSwingUp(), name='Swing up')],
         predict_difference=True,
         num_training_steps=constant_schedule(1000),
@@ -367,5 +368,5 @@ if __name__ == '__main__':
     agent.run_episodes(num_episodes=20,
                        key=jr.PRNGKey(0),
                        gp_model_state=gp_model_state,
-                       folder_name='NoCost28Aug2024'
+                       folder_name='Cost30Aug2024'
                        )
