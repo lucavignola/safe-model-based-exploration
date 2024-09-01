@@ -115,7 +115,8 @@ def create_plot(trajectories,
 def create_plot_double(unsafe_trajectories,
                        safe_trajectories,
                        episodes: List[int],
-                       save_name: str | None = None):
+                       save_name: str | None = None,
+                       suptitle: str | None = None, ):
     num_cols = len(episodes)
     fig, axs = plt.subplots(2, ncols=num_cols, figsize=(4 * num_cols, 4 * 2), sharey=True, sharex=True)
     for index, episode in enumerate(episodes):
@@ -131,9 +132,10 @@ def create_plot_double(unsafe_trajectories,
         put_trajectories_on_ax(axs[1, index], safe_trajectories[:episode], add_y_label=add_y_label,
                                add_x_label=add_x_label)
 
-
-
-    fig.suptitle('Pendulum Active Exploration', fontsize=SUPTITLE_SIZE, y=0.98)
+    if suptitle:
+        fig.suptitle(suptitle, fontsize=SUPTITLE_SIZE, y=0.98)
+    else:
+        fig.suptitle('Pendulum Active Exploration', fontsize=SUPTITLE_SIZE, y=0.98)
 
     handles, labels = [], []
     for ax in axs[0]:
@@ -141,8 +143,6 @@ def create_plot_double(unsafe_trajectories,
             handles.append(handle)
             labels.append(label)
     by_label = dict(zip(labels, handles))
-
-
 
     fig.legend(by_label.values(), by_label.keys(),
                ncols=3,
@@ -152,10 +152,9 @@ def create_plot_double(unsafe_trajectories,
                frameon=False)
 
     # Add title for the first row
-    fig.text(0.02, 0.65, 'Unsafe Exploration', ha='center', va='center', fontsize=TITLE_SIZE, rotation='vertical')
+    fig.text(0.02, 0.65, 'Unsafe', ha='center', va='center', fontsize=TITLE_SIZE, rotation='vertical')
     # Add title for the second row
-    fig.text(0.02, 0.27, 'Safe Exploration', ha='center', va='center', fontsize=TITLE_SIZE, rotation='vertical')
-
+    fig.text(0.02, 0.27, 'Safe', ha='center', va='center', fontsize=TITLE_SIZE, rotation='vertical')
 
     fig.tight_layout(rect=[0.02, 0.0, 1, 0.93])
     if save_name:
