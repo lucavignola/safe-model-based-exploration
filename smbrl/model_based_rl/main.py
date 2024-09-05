@@ -10,7 +10,8 @@ import jax.tree as jt
 import matplotlib.pyplot as plt
 from brax.envs import Env as BraxEnv
 from brax.envs import State
-from bsm.bayesian_regression.gaussian_processes import GaussianProcess, GPModelState
+from bsm.bayesian_regression.bayesian_regression_model import BayesianRegressionModel
+from bsm.utils.type_aliases import ModelState
 from bsm.utils.normalization import Data
 from distrax import Distribution, Normal
 from flax import struct
@@ -31,10 +32,10 @@ class Task(NamedTuple):
     name: str
 
 
-class GPModelBasedAgent:
+class ModelBasedAgent:
     def __init__(self,
                  env: BraxEnv,
-                 gp_model: GaussianProcess,
+                 model: BayesianRegressionModel,
                  episode_length: int,
                  action_repeat: int,
                  cost_fn: AbstractCost,
@@ -45,7 +46,7 @@ class GPModelBasedAgent:
                  icem_params: iCemParams = iCemParams(),
                  ):
         self.env = env
-        self.gp_model = gp_model
+        self.model = model
         self.episode_length = episode_length
         self.action_repeat = action_repeat
         self.cost_fn = cost_fn
@@ -57,22 +58,22 @@ class GPModelBasedAgent:
         self.icem_params = icem_params
 
     def train_dynamics_model(self,
-                             gp_model_state: GPModelState,
+                             model_state: ModelState,
                              data: Data,
-                             episode_idx: int) -> GPModelState:
-        gp_model_state = self.gp_model.fit_model(data=data,
-                                                 num_training_steps=self.num_training_steps(episode_idx),
-                                                 model_state=gp_model_state)
-        return gp_model_state
+                             episode_idx: int) -> ModelState:
+        model_state = self.model.fit_model(data=data,
+                                           num_training_steps=self.num_training_steps(episode_idx),
+                                           model_state=model_state)
+        return model_state
 
     def test_a_task(self,
-                    gp_model_state: GPModelState,
+                    model_state: ModelState,
                     key: Key[Array, '2'],
                     task: Task,
                     ) -> Tuple[State, Float[Array, '... action_dim']]:
         exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
                                                    u_dim=self.env.action_size,
-                                                   gp_model=self.gp_model,
+                                                   model=self.model,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -92,7 +93,7 @@ class GPModelBasedAgent:
         key, subkey = jr.split(key)
         optimizer_state = optimizer.init(key=subkey)
 
-        dynamics_params = optimizer_state.system_params.dynamics_params.replace(gp_model_state=gp_model_state)
+        dynamics_params = optimizer_state.system_params.dynamics_params.replace(model_state=model_state)
         system_params = optimizer_state.system_params.replace(dynamics_params=dynamics_params)
         optimizer_state = optimizer_state.replace(system_params=system_params)
 
@@ -119,7 +120,7 @@ class GPModelBasedAgent:
         return collected_states, actions
 
     def simulate_on_true_env(self,
-                             gp_model_state: GPModelState,
+                             model_state: ModelState,
                              key: Key[Array, '2'], ) -> Tuple[
         PyTree[Array, 'episode_length ...'], Float[Array, 'episode_length action_dim'], Float[
             Array, 'episode_length 1']]:
@@ -127,7 +128,7 @@ class GPModelBasedAgent:
                                                u_dim=self.env.action_size, )
         exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
                                                    u_dim=self.env.action_size,
-                                                   gp_model=self.gp_model,
+                                                   model=self.model,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -147,7 +148,7 @@ class GPModelBasedAgent:
         key, subkey = jr.split(key)
         optimizer_state = optimizer.init(key=subkey)
 
-        dynamics_params = optimizer_state.system_params.dynamics_params.replace(gp_model_state=gp_model_state)
+        dynamics_params = optimizer_state.system_params.dynamics_params.replace(model_state=model_state)
         system_params = optimizer_state.system_params.replace(dynamics_params=dynamics_params)
         optimizer_state = optimizer_state.replace(system_params=system_params)
 
@@ -156,15 +157,15 @@ class GPModelBasedAgent:
         collected_states = [env_state]
         actions = []
         extrinsic_rewards = []
-
+        # TODO: Should implement treatment of done flags
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
             for _ in range(self.action_repeat):
                 env_state = self.env.step(env_state, action)
             # Calculate extrinsic reward
             z = jnp.concatenate([env_state.obs, action])
-            dist_f, dist_y = self.gp_model.posterior(input=z, gp_model=gp_model_state)
-            epistemic_std, aleatoric_std = dist_y.stddev(), dist_y.aleatoric_std()
+            dist_f, dist_y = self.model.posterior(z, model_state)
+            epistemic_std, aleatoric_std = dist_f.stddev(), dist_y.aleatoric_std()
             extrinsic_reward = learned_system.dynamics.get_intrinsic_reward(epistemic_std=epistemic_std,
                                                                             aleatoric_std=aleatoric_std)
             extrinsic_rewards.append(extrinsic_reward)
@@ -174,12 +175,12 @@ class GPModelBasedAgent:
         collected_states = jt.map(lambda *xs: jnp.stack(xs), *collected_states)
         actions = jt.map(lambda *xs: jnp.stack(xs), *actions)
         extrinsic_rewards = jt.map(lambda *xs: jnp.stack(xs), *extrinsic_rewards)
-
         return collected_states, actions, extrinsic_rewards
 
     def from_collected_transitions_to_data(self,
                                            collected_states: PyTree[Array, 'episode_length ...'],
                                            actions: Float[Array, 'episode_length action_dim']) -> Data:
+        # TODO: Isn't this wrong, if we have a done flag in collected_states?
         states = collected_states.obs[:-1]
         next_states = collected_states.obs[1:]
         inputs = jnp.concatenate([states, actions], axis=-1)
@@ -209,29 +210,29 @@ class GPModelBasedAgent:
         print(title + ': ' + f'Minimal velocity value: {jnp.min(jnp.stack(states)[:, -1])}')
 
     def do_episode(self,
-                   gp_model_state: GPModelState,
+                   model_state: ModelState,
                    episode_idx: int,
                    data: Data,
                    key: Key[Array, '2'],
                    plotting: bool = True,
                    folder_name: str = 'experiment_2024'
-                   ) -> (GPModelState, Data):
+                   ) -> (ModelState, Data):
         if episode_idx > 0:
             # If we collected some data already then we train dynamics model and the policy
             print(f'Start of dynamics training')
-            gp_model_state = self.train_dynamics_model(gp_model_state=gp_model_state,
-                                                       data=data,
-                                                       episode_idx=episode_idx)
+            model_state = self.train_dynamics_model(model_state=model_state,
+                                                    data=data,
+                                                    episode_idx=episode_idx)
 
         # We collect new data with the current policy
         print(f'Start of data collection')
         exploration_states, exploration_actions, exploration_rewards = self.simulate_on_true_env(
-            gp_model_state=gp_model_state,
+            model_state=model_state,
             key=key)
 
         task_outputs = []
         for task in self.test_tasks:
-            task_outputs.append(self.test_a_task(gp_model_state=gp_model_state, key=key, task=task))
+            task_outputs.append(self.test_a_task(model_state=model_state, key=key, task=task))
 
         if plotting:
             self.plot_trajectories(exploration_states.obs, exploration_actions, exploration_rewards,
@@ -254,8 +255,8 @@ class GPModelBasedAgent:
         with open(os.path.join(folder_name, 'data.pkl'), 'wb') as file:
             pickle.dump(data, file)
 
-        with open(os.path.join(folder_name, 'gp_model_state.pkl'), 'wb') as file:
-            pickle.dump(gp_model_state, file)
+        with open(os.path.join(folder_name, 'model_state.pkl'), 'wb') as file:
+            pickle.dump(model_state, file)
 
         with open(os.path.join(folder_name, 'exploration_trajectory.pkl'), 'wb') as file:
             pickle.dump(ExplorationTrajectory(states=exploration_states, actions=exploration_actions,
@@ -264,14 +265,14 @@ class GPModelBasedAgent:
         with open(os.path.join(folder_name, 'task_outputs.pkl'), 'wb') as file:
             pickle.dump(task_outputs, file)
 
-        return gp_model_state, data
+        return model_state, data
 
     def run_episodes(self,
                      num_episodes: int,
                      key: Key[Array, '2'] = jr.PRNGKey(0),
-                     gp_model_state: GPModelState | None = None,
+                     model_state: ModelState | None = None,
                      data: Data | None = None,
-                     folder_name: str = 'experiment_2024') -> (GPModelState, Data):
+                     folder_name: str = 'experiment_2024') -> (ModelState, Data):
         create_folder(folder_name)
         if data is None:
             data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size + self.env.action_size)),
@@ -280,23 +281,24 @@ class GPModelBasedAgent:
         for episode_idx in range(num_episodes):
             key, subkey = jr.split(key)
             print(f'Starting with Episode {episode_idx}')
-            gp_model_state, data = self.do_episode(gp_model_state=gp_model_state,
-                                                   episode_idx=episode_idx,
-                                                   data=data,
-                                                   key=subkey,
-                                                   folder_name=folder_name)
+            model_state, data = self.do_episode(model_state=model_state,
+                                                episode_idx=episode_idx,
+                                                data=data,
+                                                key=subkey,
+                                                folder_name=folder_name)
             print(f'End of Episode {episode_idx}')
-        return gp_model_state, data
+        return model_state, data
 
 
 if __name__ == '__main__':
     from smbrl.envs.pendulum import PendulumEnv
     from smbrl.dynamics_models.gps import ARD
     from smbrl.playground.pendulum_icem import VelocityBound
+    from bsm.bayesian_regression.gaussian_processes.gaussian_processes import GaussianProcess
 
     env = PendulumEnv()
 
-    gp_model = GaussianProcess(
+    model = GaussianProcess(
         kernel=ARD(input_dim=env.observation_size + env.action_size),
         input_dim=env.observation_size + env.action_size,
         output_dim=env.observation_size,
@@ -348,9 +350,9 @@ if __name__ == '__main__':
         lambda_constraint=1e6
     )
 
-    agent = GPModelBasedAgent(
+    agent = ModelBasedAgent(
         env=PendulumEnv(),
-        gp_model=gp_model,
+        model=model,
         episode_length=50,
         action_repeat=2,
         # cost_fn=None,
@@ -364,9 +366,9 @@ if __name__ == '__main__':
         icem_params=icem_params
     )
 
-    gp_model_state = gp_model.init(jr.PRNGKey(0))
+    model_state = model.init(jr.PRNGKey(0))
     agent.run_episodes(num_episodes=20,
                        key=jr.PRNGKey(0),
-                       gp_model_state=gp_model_state,
+                       model_state=model_state,
                        folder_name='Cost30Aug2024'
                        )

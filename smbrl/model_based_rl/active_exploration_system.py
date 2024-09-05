@@ -4,7 +4,7 @@ import chex
 import jax.numpy as jnp
 import jax.random
 import jax.random as jr
-from bsm.bayesian_regression.gaussian_processes import GaussianProcess, GPModelState
+from bsm.bayesian_regression.bayesian_regression_model import BayesianRegressionModel
 from bsm.utils.type_aliases import ModelState
 from distrax import Distribution, Normal
 from jaxtyping import Float, Array, Scalar
@@ -17,21 +17,21 @@ from mbpo.systems.rewards.base_rewards import Reward, RewardParams
 @chex.dataclass
 class DynamicsParams(Generic[ModelState, DummyDynamicsParams]):
     key: chex.PRNGKey
-    gp_model_state: GPModelState
+    model_state: ModelState
 
 
 class ExplorationDynamics(Dynamics, Generic[ModelState]):
     def __init__(self,
                  x_dim: int,
                  u_dim: int,
-                 gp_model: GaussianProcess,
+                 model: BayesianRegressionModel,
                  use_log: bool = True,
                  scale_with_aleatoric_std: bool = True,
                  aleatoric_noise_in_prediction: bool = True,
                  predict_difference: bool = True,
                  ):
         Dynamics.__init__(self, x_dim=x_dim, u_dim=u_dim)
-        self.gp_model = gp_model
+        self.model = model
         self.use_log = use_log
         self.scale_with_aleatoric_std = scale_with_aleatoric_std
         self.aleatoric_noise_in_prediction = aleatoric_noise_in_prediction
@@ -39,8 +39,8 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
 
     def init_params(self, key: chex.PRNGKey) -> DynamicsParams:
         param_key, model_state_key = jr.split(key, 2)
-        model_state = self.gp_model.init(model_state_key)
-        return DynamicsParams(key=key, gp_model_state=model_state)
+        model_state = self.model.init(model_state_key)
+        return DynamicsParams(key=key, model_state=model_state)
 
     def get_intrinsic_reward(self,
                              epistemic_std: Float[Array, '... observation_dim'],
@@ -65,8 +65,8 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         # Create state-action pair
         z = jnp.concatenate([x, u])
         next_key, key_sample_x_next = jr.split(dynamics_params.key)
-        dist_f, dist_y = self.gp_model.posterior(input=z, gp_model=dynamics_params.gp_model_state)
-        epistemic_std, aleatoric_std = dist_y.stddev(), dist_y.aleatoric_std()
+        dist_f, dist_y = self.model.posterior(z, dynamics_params.model_state)
+        epistemic_std, aleatoric_std = dist_f.stddev(), dist_y.aleatoric_std()
         x_next = x
         if self.predict_difference:
             x_next += dist_f.sample(seed=key_sample_x_next)
