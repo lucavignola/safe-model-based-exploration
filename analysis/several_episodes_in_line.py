@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import pickle
 
 from smbrl.utils.utils import decode_angles
@@ -50,5 +51,15 @@ if __name__ == '__main__':
         safe_trajectories.append(states)
 
 
+    np.save(
+        "safe_trajectories.npy",
+        np.array(safe_trajectories, dtype=object),
+        allow_pickle=True,
+    )
+    np.save(
+        "unsafe_trajectories.npy",
+        np.array(unsafe_trajectories, dtype=object),
+        allow_pickle=True,
+    )
     create_plot_double(unsafe_trajectories, safe_trajectories, [1, 3, 7, 15],
                        save_name='pendulum_exploration.pdf')
