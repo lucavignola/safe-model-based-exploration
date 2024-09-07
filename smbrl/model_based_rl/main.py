@@ -260,7 +260,8 @@ class ModelBasedAgent:
 
         with open(os.path.join(folder_name, 'exploration_trajectory.pkl'), 'wb') as file:
             pickle.dump(ExplorationTrajectory(states=exploration_states, actions=exploration_actions,
-                                              rewards=exploration_rewards, ), file)
+                                              intrinsic_rewards=exploration_rewards,
+                                              extrinsic_rewards=jnp.zeros_like(exploration_rewards)), file)
 
         with open(os.path.join(folder_name, 'task_outputs.pkl'), 'wb') as file:
             pickle.dump(task_outputs, file)

@@ -31,7 +31,7 @@ class Task(NamedTuple):
     env: BraxEnv
 
 
-class ActSafeAgent:
+class SafeModelBasedAgent:
     def __init__(self,
                  env: BraxEnv,
                  model: BayesianRegressionModel,
@@ -45,7 +45,10 @@ class ActSafeAgent:
                  icem_params: iCemParams = iCemParams(),
                  saving_frequency: int = 5,
                  log_to_wandb: bool = False,
+                 train_task_index: int = -1
                  ):
+        assert train_task_index >= -1
+        assert train_task_index <= len(test_tasks)
         self.env = env
         if isinstance(model, GaussianProcess):
             jax.config.update("jax_enable_x64", True)
@@ -56,6 +59,8 @@ class ActSafeAgent:
         self.cost_fn_env = copy.deepcopy(cost_fn)
         self.cost_fn_env.horizon = self.episode_length
         self.test_tasks = test_tasks
+
+        self.train_task_index = train_task_index
 
         self.predict_difference = predict_difference
         self.num_training_steps = num_training_steps
@@ -128,20 +133,29 @@ class ActSafeAgent:
         metrics = {f'total_reward_{task.name}': jnp.sum(rewards).item(), f'cost_{task.name}': costs.item()}
         return collected_states, actions, rewards, metrics
 
+    def get_train_rewards(self) -> Reward:
+        if self.train_task_index == -1:
+            exploration_reward = ExplorationReward(x_dim=self.env.observation_size,
+                                                   u_dim=self.env.action_size, )
+            return exploration_reward
+        else:
+            return self.test_tasks[self.train_task_index].reward
+
     def simulate_on_true_env(self,
                              model_state: ModelState,
                              key: Key[Array, '2'], ) -> Tuple[
         PyTree[Array, 'episode_length ...'], Float[Array, 'episode_length action_dim'], Float[
+            Array, 'episode_length 1'], Float[
             Array, 'episode_length 1'], Float[Array, '1']]:
-        exploration_reward = ExplorationReward(x_dim=self.env.observation_size,
-                                               u_dim=self.env.action_size, )
+        reward = self.get_train_rewards()
+
         exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
                                                    u_dim=self.env.action_size,
                                                    model=self.model,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
-            reward=exploration_reward,
+            reward=reward,
         )
         key, subkey = jr.split(key)
 
@@ -165,27 +179,30 @@ class ActSafeAgent:
 
         collected_states = [env_state]
         actions = []
+        intrinsic_rewards = []
         extrinsic_rewards = []
         # TODO: Should implement treatment of done flags
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
             for _ in range(self.action_repeat):
                 env_state = self.env.step(env_state, action)
+                extrinsic_rewards.append(env_state.reward)
             # Calculate extrinsic reward
             z = jnp.concatenate([env_state.obs, action])
             dist_f, dist_y = self.model.posterior(z, model_state)
             epistemic_std, aleatoric_std = dist_f.stddev(), dist_y.aleatoric_std()
-            extrinsic_reward = learned_system.dynamics.get_intrinsic_reward(epistemic_std=epistemic_std,
+            intrinsic_reward = learned_system.dynamics.get_intrinsic_reward(epistemic_std=epistemic_std,
                                                                             aleatoric_std=aleatoric_std)
-            extrinsic_rewards.append(extrinsic_reward)
+            intrinsic_rewards.append(intrinsic_reward)
             collected_states.append(env_state)
             actions.append(action)
 
         collected_states = jt.map(lambda *xs: jnp.stack(xs), *collected_states)
         actions = jt.map(lambda *xs: jnp.stack(xs), *actions)
+        intrinsic_rewards = jt.map(lambda *xs: jnp.stack(xs), *intrinsic_rewards)
         extrinsic_rewards = jt.map(lambda *xs: jnp.stack(xs), *extrinsic_rewards)
         costs = self.cost_fn_env(collected_states.obs[:-1], actions)
-        return collected_states, actions, extrinsic_rewards, costs
+        return collected_states, actions, intrinsic_rewards, extrinsic_rewards, costs
 
     def from_collected_transitions_to_data(self,
                                            collected_states: PyTree[Array, 'episode_length ...'],
@@ -218,13 +235,14 @@ class ActSafeAgent:
 
         # We collect new data with the current policy
         print(f'Start of data collection')
-        exploration_states, exploration_actions, exploration_rewards, cost = self.simulate_on_true_env(
+        exploration_states, exploration_actions, intrinsic_rewards, extrinsic_rewards, cost = self.simulate_on_true_env(
             model_state=model_state,
             key=key)
         if self.log_to_wandb:
             wandb.log({
                 'episode_idx': episode_idx,
-                'exploration_rewards': jnp.sum(exploration_rewards).item(),
+                'intrinsic_rewards': jnp.sum(intrinsic_rewards).item(),
+                'extrinsic_rewards': jnp.sum(extrinsic_rewards).item(),
                 'constraint_cost': cost.item()
             })
 
@@ -257,7 +275,9 @@ class ActSafeAgent:
 
             with open(os.path.join(folder_name, f'exploration_trajectory_episode_{episode_idx}.pkl'), 'wb') as file:
                 pickle.dump(ExplorationTrajectory(states=exploration_states, actions=exploration_actions,
-                                                  rewards=exploration_rewards, ), file)
+                                                  intrinsic_rewards=intrinsic_rewards,
+                                                  extrinsic_rewards=extrinsic_rewards,
+                                                  ), file)
 
             with open(os.path.join(folder_name, f'task_outputs_episode_{episode_idx}.pkl'), 'wb') as file:
                 pickle.dump(task_outputs, file)
@@ -293,6 +313,17 @@ class ActSafeAgent:
         return model_state, data
 
 
+class ActSafeAgent(SafeModelBasedAgent):
+    def __init__(self, *args, **kwargs):
+        super().__init__(train_task_index=-1, *args, **kwargs)
+
+
+class SafeHUCRL(SafeModelBasedAgent):
+    def __init__(self, train_task_index: int = 0, *args, **kwargs):
+        assert train_task_index >= 0
+        super().__init__(train_task_index=train_task_index, *args, **kwargs)
+
+
 if __name__ == '__main__':
     from smbrl.envs.pendulum import PendulumEnv
     from smbrl.playground.pendulum_icem import VelocityBound
@@ -309,7 +340,7 @@ if __name__ == '__main__':
 
     offline_data = Data(inputs=jnp.concatenate([offline_data.observation, offline_data.action], axis=-1),
                         outputs=offline_data.next_observation,
-                )
+                        )
 
     env = PendulumEnv()
     log_wandb = True
@@ -359,9 +390,10 @@ if __name__ == '__main__':
             default_reward_params = PendulumRewardParams()
             return default_reward_params.replace(target_angle=self.target_angle)
 
+
     class PendulumEnvBalance(PendulumEnv):
         def reset(self,
-              rng: jax.Array) -> State:
+                  rng: jax.Array) -> State:
             # set initial state to upright
             state = State(pipeline_state=None,
                           obs=jnp.array([1.0, 0.0, 0.0]),

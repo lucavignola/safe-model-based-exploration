@@ -18,7 +18,9 @@ def create_folder(folder_name):
 class ExplorationTrajectory(NamedTuple):
     states: State
     actions: chex.Array
-    rewards: chex.Array
+    intrinsic_rewards: chex.Array
+    extrinsic_rewards: chex.Array
+
 
 
 def decode_angles(obs: Float[Array, '3']) -> Float[Array, '2']:
