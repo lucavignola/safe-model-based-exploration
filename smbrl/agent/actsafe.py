@@ -45,7 +45,9 @@ class SafeModelBasedAgent:
                  icem_params: iCemParams = iCemParams(),
                  saving_frequency: int = 5,
                  log_to_wandb: bool = False,
-                 train_task_index: int = -1
+                 train_task_index: int = -1,
+                 use_optimism: bool = True,
+                 use_pessimism: bool = True,
                  ):
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
@@ -59,6 +61,9 @@ class SafeModelBasedAgent:
         self.cost_fn_env = copy.deepcopy(cost_fn)
         self.cost_fn_env.horizon = self.episode_length
         self.test_tasks = test_tasks
+
+        self.use_optimism = use_optimism
+        self.use_pessimism = use_pessimism
 
         self.train_task_index = train_task_index
 
@@ -100,6 +105,8 @@ class SafeModelBasedAgent:
             opt_params=self.icem_params,
             system=learned_system,
             cost_fn=self.cost_fn,
+            use_optimism=self.use_optimism,
+            use_pessimism=self.use_pessimism,
         )
 
         key, subkey = jr.split(key)
@@ -166,6 +173,8 @@ class SafeModelBasedAgent:
             opt_params=self.icem_params,
             system=learned_system,
             cost_fn=self.cost_fn,
+            use_optimism=self.use_optimism,
+            use_pessimism=self.use_pessimism,
         )
 
         key, subkey = jr.split(key)

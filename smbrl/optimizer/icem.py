@@ -216,6 +216,8 @@ class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
                  key: chex.PRNGKey = jax.random.PRNGKey(0),
                  opt_params: iCemParams = iCemParams(),
                  cost_fn: AbstractCost | None = None,
+                 use_optimism: bool = True,
+                 use_pessimism: bool = True,
                  *args,
                  **kwargs):
         super().__init__(*args, **kwargs)
@@ -226,6 +228,14 @@ class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
         self.action_dim = action_dim
         self.horizon = horizon
         self.cost_fn = cost_fn
+        if use_optimism:
+            self.summarize_rew_samples = jnp.max
+        else:
+            self.summarize_rew_samples = jnp.mean
+        if use_pessimism:
+            self.summarize_cost_samples = jnp.max
+        else:
+            self.summarize_rew_samples = jnp.mean
 
     def init(self, key: chex.Array) -> iCemOptimizerState:
         assert self.system is not None, "iCem optimizer requires system to be defined."
@@ -265,13 +275,13 @@ class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
             transitions = jax.vmap(optimize_fn, in_axes=(None, 0))(initial_state, particles_rng)
             cost = 0
 
-            # We are optimistic with respect to the reward and pessimistic with respect to the constraint
-            reward = jnp.max(jnp.mean(transitions.reward, axis=-1))
+            # We summarize cost with mean or max (if optimism is true)
+            reward = self.summarize_rew_samples(jnp.mean(transitions.reward, axis=-1))
             if self.cost_fn is not None:
                 cost = vmap(self.cost_fn)(transitions.observation, transitions.action)
                 assert cost.shape == (self.opt_params.num_particles,)
-                # We take the dynamical system that is the most pessimistic
-                cost = jnp.max(cost)
+                # We summarize cost with mean or max (if pessimism is true)
+                cost = self.summarize_cost_samples(cost)
             return reward - self.opt_params.lambda_constraint * relu(cost)
 
         get_best_action = lambda best_val, best_seq, val, seq: [val[-1], seq[-1]]
