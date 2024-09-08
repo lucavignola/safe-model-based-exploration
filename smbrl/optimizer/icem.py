@@ -235,7 +235,7 @@ class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
         if use_pessimism:
             self.summarize_cost_samples = jnp.max
         else:
-            self.summarize_rew_samples = jnp.mean
+            self.summarize_cost_samples = jnp.mean
 
     def init(self, key: chex.Array) -> iCemOptimizerState:
         assert self.system is not None, "iCem optimizer requires system to be defined."
