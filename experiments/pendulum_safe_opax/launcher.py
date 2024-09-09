@@ -1,7 +1,7 @@
 import experiment
 from experiments.util import generate_run_commands, generate_base_command, dict_permutations
 
-pendulum = {'project_name': ['ExplorationPendulumSep092024', ],
+pendulum = {'project_name': ['ExplorationPendulum13hSep092024', ],
             'seed': list(range(10)),
             'safe_exploration': [0, 1],
             'iCem_alpha': [0, 0.2, ],

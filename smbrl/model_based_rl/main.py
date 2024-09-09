@@ -12,8 +12,8 @@ import wandb
 from brax.envs import Env as BraxEnv
 from brax.envs import State
 from bsm.bayesian_regression.bayesian_regression_model import BayesianRegressionModel
-from bsm.utils.type_aliases import ModelState
 from bsm.utils.normalization import Data
+from bsm.utils.type_aliases import ModelState
 from distrax import Distribution, Normal
 from flax import struct
 from jaxtyping import Key, Array, PyTree, Float
@@ -22,7 +22,6 @@ from optax import Schedule, constant_schedule
 
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
 from smbrl.optimizer.icem import iCemParams, iCemTO, AbstractCost
-from smbrl.utils.plot_3d_trajectory import create_3d_trajectory_plot
 from smbrl.utils.utils import create_folder, ExplorationTrajectory
 
 jax.config.update("jax_enable_x64", True)
@@ -259,11 +258,12 @@ class ModelBasedAgent:
             self.plot_trajectories(exploration_states.obs, exploration_actions, exploration_rewards,
                                    title=f'Exploration trajectory Episode {episode_idx}')
 
-            th = jnp.arctan2(exploration_states.obs[:, 1], exploration_states.obs[:, 0])
-            omega = exploration_states.obs[:, 2]
-            u = exploration_actions[:, 0]
-            trajectory = jnp.stack([th[:-1], omega[:-1], u], axis=-1)
-            create_3d_trajectory_plot(trajectory)
+            # TODO: The following works only locally since latex is not installed on Euler server
+            # th = jnp.arctan2(exploration_states.obs[:, 1], exploration_states.obs[:, 0])
+            # omega = exploration_states.obs[:, 2]
+            # u = exploration_actions[:, 0]
+            # trajectory = jnp.stack([th[:-1], omega[:-1], u], axis=-1)
+            # create_3d_trajectory_plot(trajectory)
         new_data = self.from_collected_transitions_to_data(exploration_states, exploration_actions)
         data = Data(inputs=jnp.concatenate([data.inputs, new_data.inputs]),
                     outputs=jnp.concatenate([data.outputs, new_data.outputs]), )
