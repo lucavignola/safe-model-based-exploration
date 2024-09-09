@@ -71,6 +71,8 @@ class ModelBasedAgent:
                     model_state: ModelState,
                     key: Key[Array, '2'],
                     task: Task,
+                    save_to_wandb: bool,
+                    episode_idx: int,
                     ) -> Tuple[State, Float[Array, '... action_dim']]:
         exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
                                                    u_dim=self.env.action_size,
@@ -118,11 +120,18 @@ class ModelBasedAgent:
             rewards=collected_states.reward,
             title=task.name
         )
+
+        if save_to_wandb:
+            wandb.log({'extrinsic_reward': jnp.sum(collected_states.reward),
+                       'episode_idx': episode_idx})
+
         return collected_states, actions
 
     def simulate_on_true_env(self,
                              model_state: ModelState,
-                             key: Key[Array, '2'], ) -> Tuple[
+                             key: Key[Array, '2'],
+                             save_to_wandb: bool,
+                             episode_idx: int, ) -> Tuple[
         PyTree[Array, 'episode_length ...'], Float[Array, 'episode_length action_dim'], Float[
             Array, 'episode_length 1']]:
         exploration_reward = ExplorationReward(x_dim=self.env.observation_size,
@@ -176,6 +185,9 @@ class ModelBasedAgent:
         collected_states = jt.map(lambda *xs: jnp.stack(xs), *collected_states)
         actions = jt.map(lambda *xs: jnp.stack(xs), *actions)
         extrinsic_rewards = jt.map(lambda *xs: jnp.stack(xs), *extrinsic_rewards)
+        if save_to_wandb:
+            wandb.log({'extrinsic_reward': jnp.sum(extrinsic_rewards),
+                       'episode_idx': episode_idx})
         return collected_states, actions, extrinsic_rewards
 
     def from_collected_transitions_to_data(self,
@@ -205,6 +217,9 @@ class ModelBasedAgent:
         axs[2].plot(rewards[1:])
         axs[2].set_title('Reward')
         plt.tight_layout()
+
+        wandb.log({title: wandb.Image(fig), })
+
         plt.show()
 
         print(title + ': ' + f'Maximal velocity value: {jnp.max(jnp.stack(states)[:, -1])}')
@@ -230,11 +245,15 @@ class ModelBasedAgent:
         print(f'Start of data collection')
         exploration_states, exploration_actions, exploration_rewards = self.simulate_on_true_env(
             model_state=model_state,
-            key=key)
+            key=key,
+            save_to_wandb=save_to_wandb,
+            episode_idx=episode_idx)
 
         task_outputs = []
         for task in self.test_tasks:
-            task_outputs.append(self.test_a_task(model_state=model_state, key=key, task=task))
+            task_outputs.append(
+                self.test_a_task(model_state=model_state, key=key, task=task, save_to_wandb=save_to_wandb,
+                                 episode_idx=episode_idx))
 
         if plotting:
             self.plot_trajectories(exploration_states.obs, exploration_actions, exploration_rewards,

@@ -11,6 +11,9 @@ def experiment(project_name: str,
                   safe_exploration=safe_exploration,
                   iCem_alpha=iCem_alpha)
 
+    import os
+    os.environ['JAX_PLATFORMS'] = 'cpu'
+
     from typing import Tuple
 
     import jax
