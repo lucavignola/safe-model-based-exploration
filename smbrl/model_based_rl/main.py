@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import jax.tree as jt
 import matplotlib.pyplot as plt
+import wandb
 from brax.envs import Env as BraxEnv
 from brax.envs import State
 from bsm.bayesian_regression.bayesian_regression_model import BayesianRegressionModel
@@ -215,7 +216,8 @@ class ModelBasedAgent:
                    data: Data,
                    key: Key[Array, '2'],
                    plotting: bool = True,
-                   folder_name: str = 'experiment_2024'
+                   folder_name: str = 'experiment_2024',
+                   save_to_wandb: bool = False,
                    ) -> (ModelState, Data):
         if episode_idx > 0:
             # If we collected some data already then we train dynamics model and the policy
@@ -251,20 +253,47 @@ class ModelBasedAgent:
         folder_name = os.path.join(folder_name, f'episode_{episode_idx}')
         create_folder(folder_name)
 
-        # Saving data to a pickle file
-        with open(os.path.join(folder_name, 'data.pkl'), 'wb') as file:
-            pickle.dump(data, file)
+        if not save_to_wandb:
+            # Saving data to a pickle file
+            with open(os.path.join(folder_name, 'data.pkl'), 'wb') as file:
+                pickle.dump(data, file)
 
-        with open(os.path.join(folder_name, 'model_state.pkl'), 'wb') as file:
-            pickle.dump(model_state, file)
+            with open(os.path.join(folder_name, 'model_state.pkl'), 'wb') as file:
+                pickle.dump(model_state, file)
 
-        with open(os.path.join(folder_name, 'exploration_trajectory.pkl'), 'wb') as file:
-            pickle.dump(ExplorationTrajectory(states=exploration_states, actions=exploration_actions,
-                                              intrinsic_rewards=exploration_rewards,
-                                              extrinsic_rewards=jnp.zeros_like(exploration_rewards)), file)
+            with open(os.path.join(folder_name, 'exploration_trajectory.pkl'), 'wb') as file:
+                pickle.dump(ExplorationTrajectory(states=exploration_states, actions=exploration_actions,
+                                                  intrinsic_rewards=exploration_rewards,
+                                                  extrinsic_rewards=jnp.zeros_like(exploration_rewards)), file)
 
-        with open(os.path.join(folder_name, 'task_outputs.pkl'), 'wb') as file:
-            pickle.dump(task_outputs, file)
+            with open(os.path.join(folder_name, 'task_outputs.pkl'), 'wb') as file:
+                pickle.dump(task_outputs, file)
+
+        if save_to_wandb:
+            folder_name = os.path.join(wandb.run.dir, 'saved_data', f'episode_{episode_idx}')
+            create_folder(folder_name)
+
+            # Saving data to a pickle file
+            with open(os.path.join(folder_name, 'data.pkl'), 'wb') as file:
+                pickle.dump(data, file)
+            wandb.save(os.path.join(folder_name, 'data.pkl'), wandb.run.dir)
+
+            with open(os.path.join(folder_name, 'model_state.pkl'), 'wb') as file:
+                pickle.dump(model_state, file)
+
+            wandb.save(os.path.join(folder_name, 'model_state.pkl'), wandb.run.dir)
+
+            with open(os.path.join(folder_name, 'exploration_trajectory.pkl'), 'wb') as file:
+                pickle.dump(ExplorationTrajectory(states=exploration_states, actions=exploration_actions,
+                                                  intrinsic_rewards=exploration_rewards,
+                                                  extrinsic_rewards=jnp.zeros_like(exploration_rewards)), file)
+
+            wandb.save(os.path.join(folder_name, 'exploration_trajectory.pkl'), wandb.run.dir)
+
+            with open(os.path.join(folder_name, 'task_outputs.pkl'), 'wb') as file:
+                pickle.dump(task_outputs, file)
+
+            wandb.save(os.path.join(folder_name, 'task_outputs.pkl'), wandb.run.dir)
 
         return model_state, data
 
@@ -273,7 +302,8 @@ class ModelBasedAgent:
                      key: Key[Array, '2'] = jr.PRNGKey(0),
                      model_state: ModelState | None = None,
                      data: Data | None = None,
-                     folder_name: str = 'experiment_2024') -> (ModelState, Data):
+                     folder_name: str = 'experiment_2024',
+                     save_to_wandb: bool = False) -> (ModelState, Data):
         create_folder(folder_name)
         if data is None:
             data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size + self.env.action_size)),
@@ -286,7 +316,8 @@ class ModelBasedAgent:
                                                 episode_idx=episode_idx,
                                                 data=data,
                                                 key=subkey,
-                                                folder_name=folder_name)
+                                                folder_name=folder_name,
+                                                save_to_wandb=save_to_wandb)
             print(f'End of Episode {episode_idx}')
         return model_state, data
 
@@ -367,9 +398,16 @@ if __name__ == '__main__':
         icem_params=icem_params
     )
 
+    wandb.init(
+        project='TestSaveExploration',
+        # dir='/cluster/scratch/' + ENTITY,
+        # config=config,
+    )
+
     model_state = model.init(jr.PRNGKey(0))
     agent.run_episodes(num_episodes=20,
                        key=jr.PRNGKey(0),
                        model_state=model_state,
-                       folder_name='Cost30Aug2024'
+                       folder_name='TestFolderSep9th',
+                       save_to_wandb=True
                        )
