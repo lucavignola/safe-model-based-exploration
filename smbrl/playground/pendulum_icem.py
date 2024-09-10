@@ -120,8 +120,16 @@ class VelocityBound(AbstractCost):
 
 if __name__ == '__main__':
 
-    action_repeat = 1
+    action_repeat = 2
     horizon = 20
+    safe_exploration = False
+
+    cost_fn = None
+    if safe_exploration:
+        cost_fn = VelocityBound(horizon=horizon,
+                                max_abs_velocity=6.0 - 10 ** (-3),
+                                violation_eps=1e-3, )
+
     optimizer = iCemTO(
         horizon=horizon,
         action_dim=1,
@@ -132,9 +140,7 @@ if __name__ == '__main__':
                               num_steps=5,
                               num_particles=1, ),
         system=ActionRepeatWrapper(action_repeat=action_repeat, system=PendulumSystem()),
-        cost_fn=VelocityBound(horizon=horizon,
-                              max_abs_velocity=10.0,
-                              violation_eps=1e-3, ),
+        cost_fn=cost_fn,
     )
 
     system = PendulumSystem()
@@ -149,7 +155,7 @@ if __name__ == '__main__':
 
     times = []
 
-    for i in range(200 // action_repeat):
+    for i in range(100 // action_repeat):
         start_time = time.time()
         action, optimizer_state = optimizer.act(obs, optimizer_state)
         for _ in range(action_repeat):
@@ -175,3 +181,8 @@ if __name__ == '__main__':
 
     print(f'Maximal velocity value: {jnp.max(jnp.stack(all_obs)[:, -1])}')
     print(f'Minimal velocity value: {jnp.min(jnp.stack(all_obs)[:, -1])}')
+
+    import numpy as np
+
+    total_reward = np.sum(np.array(all_rewards))
+    print(f'Total reward: {total_reward}')
