@@ -17,6 +17,7 @@
 
 import warnings
 import jax.numpy as jnp
+from matplotlib import pyplot as plt
 
 # The value returned by tolerance() at `margin` distance from `bounds` interval.
 _DEFAULT_VALUE_AT_MARGIN = 0.1
@@ -86,7 +87,7 @@ def _sigmoids(x, value_at_1, sigmoid):
     elif sigmoid == "quadratic":
         scale = jnp.sqrt(1 - value_at_1)
         scaled_x = x * scale
-        return jnp.where(abs(scaled_x) < 1, 1 - scaled_x**2, 0.0)
+        return jnp.where(abs(scaled_x) < 1, 1 - scaled_x ** 2, 0.0)
 
     elif sigmoid == "tanh_squared":
         scale = jnp.arctanh(jnp.sqrt(1 - value_at_1))
@@ -97,11 +98,11 @@ def _sigmoids(x, value_at_1, sigmoid):
 
 
 def tolerance(
-    x,
-    bounds=(0.0, 0.0),
-    margin=0.0,
-    sigmoid="gaussian",
-    value_at_margin=_DEFAULT_VALUE_AT_MARGIN,
+        x,
+        bounds=(0.0, 0.0),
+        margin=0.0,
+        sigmoid="gaussian",
+        value_at_margin=_DEFAULT_VALUE_AT_MARGIN,
 ):
     """Returns 1 when `x` falls inside the bounds, between 0 and 1 otherwise.
 
@@ -144,3 +145,19 @@ def tolerance(
         value = jnp.where(in_bounds, 1.0, _sigmoids(d, value_at_margin, sigmoid))
 
     return float(value) if jnp.isscalar(x) else value
+
+
+if __name__ == "__main__":
+    from jax import vmap
+
+    x = jnp.linspace(0, 11, 100).reshape(-1, 1)
+
+
+    def f(x):
+        return tolerance(x, margin=10, value_at_margin=0, sigmoid="quadratic")[0]
+
+
+    y = vmap(f)(x)
+
+    plt.plot(x, y)
+    plt.show()

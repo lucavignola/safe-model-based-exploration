@@ -370,6 +370,7 @@ class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
         new_opt_state = new_opt_state.replace(best_sequence=outs[1][-1, ...], best_reward=outs[0][-1, ...])
         return new_opt_state
 
+    @partial(jax.jit, static_argnums=0)
     def act(self, obs: chex.Array, opt_state: iCemOptimizerState, evaluate: bool = True):
         new_opt_state = self.optimize(initial_state=obs, opt_state=opt_state)
         return new_opt_state.action, new_opt_state
