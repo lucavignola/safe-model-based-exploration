@@ -133,11 +133,11 @@ if __name__ == '__main__':
                               num_particles=1, ),
         system=ActionRepeatWrapper(action_repeat=action_repeat, system=CartPoleSystem()),
         cost_fn=PositionBound(horizon=horizon,
-                              max_position=0.49,
+                              max_position=0.5,
                               violation_eps=1e-3, ),
     )
 
-    system = CartPoleSystem()
+    system = ActionRepeatWrapper(action_repeat=action_repeat, system=CartPoleSystem())
 
     optimizer_state = optimizer.init(key=jr.PRNGKey(1))
     system_params = system.init_params(key=jr.PRNGKey(2))
@@ -148,11 +148,11 @@ if __name__ == '__main__':
     all_rewards = []
 
     times = []
-
+    first_times = time.time()
     for i in range(100 // action_repeat):
         start_time = time.time()
         action, optimizer_state = optimizer.act(obs, optimizer_state)
-        for _ in range(action_repeat):
+        for _ in range(1):
             sys_state = system.step(obs, action, system_params)
             obs, reward, system_params = sys_state.x_next, sys_state.reward, sys_state.system_params
         all_obs.append(obs)
@@ -160,6 +160,8 @@ if __name__ == '__main__':
         all_rewards.append(reward)
         end_time = time.time()
         times.append(end_time - start_time)
+
+    print(f'Total time {time.time() - first_times:.2f}')
 
     fig, axs = plt.subplots(1, 4, figsize=(8, 2))
     all_obs = jnp.array(all_obs)
@@ -179,3 +181,12 @@ if __name__ == '__main__':
 
     print(f'Maximal x position: {jnp.max(jnp.stack(all_obs)[:, 0])}')
     print(f'Minimal x position: {jnp.min(jnp.stack(all_obs)[:, 0])}')
+
+    from jax import vmap
+    import pickle
+
+    env = CartPoleEnv(init_angle=0.0)
+    all_states = vmap(env.from_obs_to_state)(all_obs)
+
+    with open('save_trajectory.pkl', 'wb') as file:
+        pickle.dump(all_states, file)

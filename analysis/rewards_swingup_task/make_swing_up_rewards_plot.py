@@ -1,8 +1,9 @@
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
 import os
 import pickle
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 
 LEGEND_SIZE = 20
 LABEL_SIZE = 20
@@ -21,7 +22,6 @@ import matplotlib as mpl
 
 mpl.rcParams['xtick.labelsize'] = TICKS_SIZE
 mpl.rcParams['ytick.labelsize'] = TICKS_SIZE
-
 
 PROJECT = 'ExplorationPendulum13hSep092024'
 NUM_EPISODES = 15
@@ -59,7 +59,6 @@ def prepare_reward_vector(run_id: str) -> np.ndarray:
     return np.array(rewards)
 
 
-
 for index, row in data.iterrows():
     run_id, safe = row['run_id'], row['safe_exploration']
     rewards_vector = prepare_reward_vector(run_id)
@@ -68,10 +67,9 @@ for index, row in data.iterrows():
     else:
         rewards_unsafe_exploration.append(rewards_vector)
 
-
-
 rewards_safe_exploration = np.array(rewards_safe_exploration)
 rewards_unsafe_exploration = np.array(rewards_unsafe_exploration)
+
 
 def add_to_ax(ax, array, color, label):
     index = np.arange(len(array[0]))
@@ -80,14 +78,14 @@ def add_to_ax(ax, array, color, label):
     ax.plot(index, mean, color=color, label=label)
     ax.fill_between(index, mean - std, mean + std, alpha=0.2)
 
+
 fig, ax = plt.subplots()
 
 add_to_ax(ax, rewards_safe_exploration, 'blue', 'Safe')
 add_to_ax(ax, rewards_unsafe_exploration, 'red', 'Unsafe')
 
-
 ax.hlines(y=best_safe, xmin=0, xmax=15, linewidth=2, color='black', label='Best Safe', linestyles="--")
-ax.hlines(y=best_unsafe, xmin=0, xmax=15, linewidth=2, color='black', label='Best Unsafe',  linestyles="-.")
+ax.hlines(y=best_unsafe, xmin=0, xmax=15, linewidth=2, color='black', label='Best Unsafe', linestyles="-.")
 
 ax.set_title('Pendulum Swing-Up Task', fontsize=TITLE_SIZE)
 ax.set_xlabel('Episodes', fontsize=LABEL_SIZE)
