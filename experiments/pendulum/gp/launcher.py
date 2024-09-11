@@ -6,6 +6,7 @@ PROJECT_NAME = 'ActSafeTestGP8Sept'
 
 _applicable_configs = {
     'env_margin_factor': [5.0, 10.0],
+    'reward_source': ['dm-control'],
     'project_name': [PROJECT_NAME],
     'num_training_steps': [1_000],
     'seed': list(range(5)),

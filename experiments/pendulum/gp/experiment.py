@@ -24,6 +24,7 @@ def experiment(
         max_abs_velocity: float = 6.0,
         num_training_steps: int = 1_000,
         env_margin_factor: float = 10.0,
+        reward_source: str = 'gym',
         use_optimism: bool = True,
         use_pessimism: bool = True,
         log_wandb: bool = True,
@@ -63,6 +64,7 @@ def experiment(
         max_abs_velocity=max_abs_velocity,
         num_training_steps=num_training_steps,
         env_margin_factor=env_margin_factor,
+        reward_source=reward_source,
         use_optimism=use_optimism,
         use_pessimism=use_pessimism,
     )
@@ -89,8 +91,6 @@ def experiment(
         output_dim=env.observation_size,
         output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
         logging_wandb=log_wandb)
-
-    icem_horizon = icem_horizon
 
     @chex.dataclass
     class PendulumRewardParams:
@@ -141,14 +141,13 @@ def experiment(
         raise NotImplementedError
 
     agent = alg(
-        env=PendulumEnv(margin_factor=env_margin_factor),
+        env=PendulumEnv(margin_factor=env_margin_factor, reward_source=reward_source),
         model=model,
         episode_length=episode_length,
         action_repeat=action_repeat,
-        # cost_fn=None,
         cost_fn=VelocityBound(horizon=icem_horizon,
-                              max_abs_velocity=max_abs_velocity - 10 ** (-3),
-                              violation_eps=1e-3, ),
+                              max_abs_velocity=max_abs_velocity,
+                              violation_eps=0.0, ),
         test_tasks=[Task(reward=PendulumReward(), name='Swing up', env=env),
                     # Task(reward=PendulumReward(), name='Balance', env=PendulumEnvBalance()),
                     Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
@@ -174,6 +173,7 @@ def experiment(
                        folder_name=f'{alg_name}/{exp_hash}/{logs_dir}/',
                        data=offline_data,
                        )
+
 
 def main(args):
     """"""
@@ -211,6 +211,7 @@ def main(args):
         max_abs_velocity=args.max_abs_velocity,
         num_training_steps=args.num_training_steps,
         env_margin_factor=args.env_margin_factor,
+        reward_source=args.reward_source,
         use_optimism=bool(args.use_optimism),
         use_pessimism=bool(args.use_pessimism),
         log_wandb=bool(args.log_wandb),
@@ -218,6 +219,7 @@ def main(args):
         logs_dir=args.logs_dir,
         exp_hash=exp_hash,
     )
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='MTTest')
@@ -239,7 +241,8 @@ if __name__ == '__main__':
     parser.add_argument('--action_repeat', type=int, default=2)
     parser.add_argument('--max_abs_velocity', type=float, default=6.0)
     parser.add_argument('--num_training_steps', type=int, default=1_000)
-    parser.add_argument('--env_margin_factor', type=float, default=10.0)
+    parser.add_argument('--env_margin_factor', type=float, default='gym')
+    parser.add_argument('--reward_source', type=str, default=1.0)
     parser.add_argument('--use_optimism', type=int, default=1)
     parser.add_argument('--use_pessimism', type=int, default=1)
     parser.add_argument('--log_wandb', type=int, default=1)

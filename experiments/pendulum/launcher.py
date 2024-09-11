@@ -6,6 +6,7 @@ PROJECT_NAME = 'ActSafeTestBNN8Sept'
 
 _applicable_configs = {
     'env_margin_factor': [5.0, 10.0],
+    'reward_source': ['dm-control'],
     'project_name': [PROJECT_NAME],
     'num_training_steps': [10_000],
     'num_offline_data': [0, 100],
@@ -13,24 +14,23 @@ _applicable_configs = {
     'entity': ['sukhijab'],
 }
 
-
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1]} \
                               | _applicable_configs
 
 _applicable_configs_actsafe_no_optimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [1]} \
-                              | _applicable_configs
-
+                                          | _applicable_configs
 
 _applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0]} \
-                              | _applicable_configs
+                                           | _applicable_configs
 
 _applicable_configs_safehucrl = {'alg_name': ['SafeHUCRL'], 'use_optimism': [1], 'use_pessimism': [1]} \
-                              | _applicable_configs
+                                | _applicable_configs
 
 all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
                          + dict_permutations(_applicable_configs_actsafe_no_optimism) \
                          + dict_permutations(_applicable_configs_actsafe_no_pessimism) \
                          + dict_permutations(_applicable_configs_safehucrl)
+
 
 def main(args):
     command_list = []
