@@ -33,6 +33,7 @@ def experiment(
         logs_dir: str = 'runs',
         num_gpus: int = 0,
         function_norm: float = 1.0,
+        num_elites: int = 50,
 ):
     if num_gpus == 0:
         import os
@@ -76,7 +77,8 @@ def experiment(
         use_optimism=use_optimism,
         use_pessimism=use_pessimism,
         num_gpus=num_gpus,
-        function_norm=function_norm
+        function_norm=function_norm,
+        num_elites=num_elites,
     )
 
     num_offline_data = num_offline_data
@@ -142,6 +144,7 @@ def experiment(
     icem_params = iCemParams(
         num_particles=num_particles,
         num_samples=num_samples,
+        num_elites=num_elites,
         alpha=alpha,
         num_steps=num_steps,
         exponent=exponent,
@@ -234,7 +237,8 @@ def main(args):
         logs_dir=args.logs_dir,
         num_gpus=args.num_gpus,
         exp_hash=exp_hash,
-        function_norm=args.function_norm
+        function_norm=args.function_norm,
+        num_elites=args.num_elites,
     )
 
 
@@ -265,6 +269,7 @@ if __name__ == '__main__':
     parser.add_argument('--log_wandb', type=int, default=1)
     parser.add_argument('--num_gpus', type=int, default=0)
     parser.add_argument('--function_norm', type=float, default=1.0)
+    parser.add_argument('--num_elites', type=int, default=100)
 
     parser.add_argument('--seed', type=int, default=0)
 
