@@ -1,9 +1,9 @@
 import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 
-PROJECT_NAME = 'ActSafeTestGP11Sept11_00_CPU'
+PROJECT_NAME = 'PendulumGP11Sept15_00_GPU'
 ENTITY = 'trevenl'
-NUM_GPUS = 0
+NUM_GPUS = 1
 
 _applicable_configs = {
     'env_margin_factor': [10, ],
