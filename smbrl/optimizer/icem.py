@@ -229,9 +229,9 @@ class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
         self.horizon = horizon
         self.cost_fn = cost_fn
         if use_optimism:
-            self.summarize_rew_samples = jnp.max
+            self.summarize_raw_samples = jnp.max
         else:
-            self.summarize_rew_samples = jnp.mean
+            self.summarize_raw_samples = jnp.mean
         if use_pessimism:
             self.summarize_cost_samples = jnp.max
         else:
@@ -276,7 +276,7 @@ class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
             cost = 0
 
             # We summarize cost with mean or max (if optimism is true)
-            reward = self.summarize_rew_samples(jnp.mean(transitions.reward, axis=-1))
+            reward = self.summarize_raw_samples(jnp.mean(transitions.reward, axis=-1))
             if self.cost_fn is not None:
                 cost = vmap(self.cost_fn)(transitions.observation, transitions.action)
                 assert cost.shape == (self.opt_params.num_particles,)

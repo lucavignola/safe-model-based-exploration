@@ -134,7 +134,7 @@ if __name__ == '__main__':
         system=ActionRepeatWrapper(action_repeat=action_repeat, system=CartPoleSystem()),
         cost_fn=PositionBound(horizon=horizon,
                               max_position=0.5,
-                              violation_eps=1e-3, ),
+                              violation_eps=0.0, ),
     )
 
     system = ActionRepeatWrapper(action_repeat=action_repeat, system=CartPoleSystem())

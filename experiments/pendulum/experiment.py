@@ -91,8 +91,6 @@ def experiment(
         output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
         logging_wandb=log_wandb)
 
-    icem_horizon = icem_horizon
-
     @chex.dataclass
     class PendulumRewardParams:
         control_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(0.02))
@@ -143,13 +141,14 @@ def experiment(
 
     agent = alg(
         env=PendulumEnv(margin_factor=env_margin_factor),
+        # TODO: Right now env_margin_factor doesn't do anything since we use gym reward and not dm-reward
         model=model,
         episode_length=episode_length,
         action_repeat=action_repeat,
         # cost_fn=None,
         cost_fn=VelocityBound(horizon=icem_horizon,
-                              max_abs_velocity=max_abs_velocity - 10 ** (-3),
-                              violation_eps=1e-3, ),
+                              max_abs_velocity=max_abs_velocity,
+                              violation_eps=0.0,),
         test_tasks=[Task(reward=PendulumReward(), name='Swing up', env=env),
                     # Task(reward=PendulumReward(), name='Balance', env=PendulumEnvBalance()),
                     Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
@@ -175,6 +174,7 @@ def experiment(
                        folder_name=f'{alg_name}/{exp_hash}/{logs_dir}/',
                        data=offline_data,
                        )
+
 
 def main(args):
     """"""
@@ -219,6 +219,7 @@ def main(args):
         logs_dir=args.logs_dir,
         exp_hash=exp_hash,
     )
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='MTTest')

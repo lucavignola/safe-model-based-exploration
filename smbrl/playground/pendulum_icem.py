@@ -122,13 +122,13 @@ if __name__ == '__main__':
 
     action_repeat = 2
     horizon = 20
-    safe_exploration = False
+    safe_exploration = True
 
     cost_fn = None
     if safe_exploration:
         cost_fn = VelocityBound(horizon=horizon,
-                                max_abs_velocity=6.0 - 10 ** (-3),
-                                violation_eps=1e-3, )
+                                max_abs_velocity=6.0,
+                                violation_eps=0.0, )
 
     optimizer = iCemTO(
         horizon=horizon,
