@@ -179,6 +179,8 @@ def experiment(
                        data=offline_data,
                        )
 
+    wandb.finish()
+
 
 def main(args):
     """"""

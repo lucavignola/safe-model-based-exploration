@@ -1,7 +1,9 @@
-import numpy as np
+import argparse
 import os
 import sys
-import argparse
+
+import numpy as np
+
 from smbrl.utils.experiment_utils import Logger, hash_dict
 
 
@@ -179,6 +181,7 @@ def experiment(
                        folder_name=f'{alg_name}/{exp_hash}/{logs_dir}/',
                        data=offline_data,
                        )
+    wandb.finish()
 
 
 def main(args):
