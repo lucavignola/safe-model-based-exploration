@@ -121,7 +121,7 @@ class ModelBasedAgent:
         )
 
         if save_to_wandb:
-            wandb.log({'extrinsic_reward': jnp.sum(collected_states.reward),
+            wandb.log({'task_reward': jnp.sum(collected_states.reward),
                        'episode_idx': episode_idx})
 
         return collected_states, actions
