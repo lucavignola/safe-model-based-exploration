@@ -67,11 +67,12 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         next_key, key_sample_x_next = jr.split(dynamics_params.key)
         pred = self.model(z, dynamics_params.model_state)
         epistemic_std, aleatoric_std = pred.epistemic_std, pred.aleatoric_std
+        beta = pred.statistical_model_state.beta
         x_next = x
         if self.predict_difference:
-            x_next += pred.mean + pred.epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
+            x_next += pred.mean + beta * epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
         else:
-            x_next = pred.mean + pred.epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
+            x_next = pred.mean + beta * epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
 
         intrinsic_reward = self.get_intrinsic_reward(epistemic_std, aleatoric_std)
         intrinsic_reward = jnp.atleast_1d(intrinsic_reward)

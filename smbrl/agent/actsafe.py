@@ -1,29 +1,28 @@
+import copy
 import os.path
 import pickle
 from typing import Tuple, NamedTuple, List
-from brax.training.types import Metrics
+
 import chex
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import jax.tree as jt
+import wandb
 from brax.envs import Env as BraxEnv
 from brax.envs import State
-
+from brax.training.types import Metrics
 from bsm.statistical_model import StatisticalModel, GPStatisticalModel
-
-from bsm.utils.type_aliases import ModelState
 from bsm.utils.normalization import Data
+from bsm.utils.type_aliases import ModelState
 from distrax import Distribution, Normal
 from flax import struct
 from jaxtyping import Key, Array, PyTree, Float
 from mbpo.systems.rewards.base_rewards import Reward, RewardParams
 from optax import Schedule, constant_schedule
-import wandb
-import copy
+
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
 from smbrl.optimizer.icem import iCemParams, iCemTO, AbstractCost
-from bsm.bayesian_regression.gaussian_processes import GaussianProcess
 from smbrl.utils.utils import create_folder, ExplorationTrajectory
 
 
@@ -364,7 +363,6 @@ class SafeHUCRL(SafeModelBasedAgent):
 if __name__ == '__main__':
     from smbrl.envs.pendulum import PendulumEnv
     from smbrl.playground.pendulum_icem import VelocityBound
-    from bsm.bayesian_regression.bayesian_neural_networks import DeterministicEnsemble
     from smbrl.dynamics_models.gps import ARD
     import optax
 

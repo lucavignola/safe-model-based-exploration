@@ -13,6 +13,7 @@ _applicable_configs = {
     'seed': list(range(5)),
     'entity': [ENTITY],
     'num_gpus': [NUM_GPUS],
+    'function_norm': [2.0, 5.0, 10.0]
 }
 
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1]} \

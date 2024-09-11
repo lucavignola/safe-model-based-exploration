@@ -32,6 +32,7 @@ def experiment(
         log_wandb: bool = True,
         logs_dir: str = 'runs',
         num_gpus: int = 0,
+        function_norm: float = 1.0,
 ):
     if num_gpus == 0:
         import os
@@ -51,7 +52,7 @@ def experiment(
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.pendulum import PendulumEnv
     from smbrl.playground.pendulum_icem import VelocityBound
-    from bsm.bayesian_regression.gaussian_processes import GaussianProcess
+    from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
     from mbrl.utils.offline_data import PendulumOfflineData
 
@@ -74,7 +75,8 @@ def experiment(
         reward_source=reward_source,
         use_optimism=use_optimism,
         use_pessimism=use_pessimism,
-        num_gpus=num_gpus
+        num_gpus=num_gpus,
+        function_norm=function_norm
     )
 
     num_offline_data = num_offline_data
@@ -93,12 +95,16 @@ def experiment(
 
     env = PendulumEnv()
 
-    model = GaussianProcess(
+    model = GPStatisticalModel(
         kernel=ARD(input_dim=env.observation_size + env.action_size),
         input_dim=env.observation_size + env.action_size,
         output_dim=env.observation_size,
         output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
-        logging_wandb=log_wandb)
+        logging_wandb=log_wandb,
+        f_norm_bound=function_norm * jnp.ones(shape=(env.observation_size,)),
+        beta=None,
+        num_training_steps=constant_schedule(1000)
+    )
 
     @chex.dataclass
     class PendulumRewardParams:
@@ -228,6 +234,7 @@ def main(args):
         logs_dir=args.logs_dir,
         num_gpus=args.num_gpus,
         exp_hash=exp_hash,
+        function_norm=args.function_norm
     )
 
 
@@ -257,6 +264,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_pessimism', type=int, default=1)
     parser.add_argument('--log_wandb', type=int, default=1)
     parser.add_argument('--num_gpus', type=int, default=0)
+    parser.add_argument('--function_norm', type=float, default=1.0)
 
     parser.add_argument('--seed', type=int, default=0)
 
