@@ -29,7 +29,12 @@ def experiment(
         use_pessimism: bool = True,
         log_wandb: bool = True,
         logs_dir: str = 'runs',
+        num_gpus: int = 0,
 ):
+    if num_gpus == 0:
+        import os
+        os.environ['JAX_PLATFORMS'] = 'cpu'
+
     import jax.numpy as jnp
     import jax.random as jr
     import chex
@@ -67,6 +72,7 @@ def experiment(
         reward_source=reward_source,
         use_optimism=use_optimism,
         use_pessimism=use_pessimism,
+        num_gpus=num_gpus
     )
 
     num_offline_data = num_offline_data
@@ -217,6 +223,7 @@ def main(args):
         log_wandb=bool(args.log_wandb),
         seed=args.seed,
         logs_dir=args.logs_dir,
+        num_gpus=args.num_gpus,
         exp_hash=exp_hash,
     )
 
@@ -246,6 +253,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_optimism', type=int, default=1)
     parser.add_argument('--use_pessimism', type=int, default=1)
     parser.add_argument('--log_wandb', type=int, default=1)
+    parser.add_argument('--num_gpus', type=int, default=0)
 
     parser.add_argument('--seed', type=int, default=0)
 

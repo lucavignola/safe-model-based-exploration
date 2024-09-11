@@ -1,8 +1,9 @@
 import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 
-PROJECT_NAME = 'ActSafeTestGP11Sept10_50'
+PROJECT_NAME = 'ActSafeTestGP11Sept11_00_CPU'
 ENTITY = 'trevenl'
+NUM_GPUS = 0
 
 _applicable_configs = {
     'env_margin_factor': [10, ],
@@ -11,6 +12,7 @@ _applicable_configs = {
     'num_training_steps': [1_000],
     'seed': list(range(5)),
     'entity': [ENTITY],
+    'num_gpus': [NUM_GPUS],
 }
 
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1]} \
@@ -31,12 +33,11 @@ all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
                          + dict_permutations(_applicable_configs_safehucrl)
 
 
-def main(args):
+def main():
     command_list = []
-    logs_dir = '../'
-    if args.mode == 'euler':
-        logs_dir = '/cluster/scratch/'
-        logs_dir += ENTITY + '/' + PROJECT_NAME + '/'
+
+    logs_dir = '/cluster/scratch/'
+    logs_dir += ENTITY + '/' + PROJECT_NAME + '/'
 
     for flags in all_flags_combinations:
         flags['logs_dir'] = logs_dir
@@ -46,7 +47,7 @@ def main(args):
     # submit jobs
     generate_run_commands(command_list,
                           num_cpus=1,
-                          num_gpus=0,
+                          num_gpus=NUM_GPUS,
                           mode='euler',
                           duration='23:59:00',
                           prompt=True,
