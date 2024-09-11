@@ -8,8 +8,6 @@ from brax.envs.base import State, Env
 from flax import struct
 from jaxtyping import Float, Array, Scalar
 
-from smbrl.utils.tolerance_reward import ToleranceReward
-
 
 @chex.dataclass
 class CartPoleDynamicsParams:
@@ -22,7 +20,7 @@ class CartPoleDynamicsParams:
 
 
 @chex.dataclass
-class PendulumRewardParams:
+class CartPoleRewardParams:
     control_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(0.01))
     angle_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(1.0))
     pos_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(1.0))
@@ -36,7 +34,7 @@ class CartPoleEnv(Env):
                  init_angle: float = 0.0,
                  ):
         self.dynamics_params = CartPoleDynamicsParams()
-        self.reward_params = PendulumRewardParams()
+        self.reward_params = CartPoleRewardParams()
         self.init_angle = init_angle
         # bound = 0.1
         # value_at_margin = 0.1

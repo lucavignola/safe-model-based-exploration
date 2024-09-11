@@ -10,7 +10,6 @@ def experiment(
         alg_name: str = 'ActSafe',
         entity_name: str = 'sukhijab',
         exp_hash: str = '42',
-        num_offline_data: int = 100,
         seed: int = 0,
         num_particles: int = 10,
         num_samples: int = 500,
@@ -21,10 +20,8 @@ def experiment(
         icem_horizon: int = 20,
         episode_length: int = 50,
         action_repeat: int = 2,
-        max_abs_velocity: float = 6.0,
+        max_position: float = 0.5,
         num_training_steps: int = 1_000,
-        env_margin_factor: float = 10.0,
-        reward_source: str = 'gym',
         use_optimism: bool = True,
         use_pessimism: bool = True,
         log_wandb: bool = True,
@@ -44,18 +41,16 @@ def experiment(
     from distrax import Distribution, Normal
     from typing import Tuple
     from optax import constant_schedule
-    from bsm.utils.normalization import Data
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
-    from smbrl.envs.pendulum import PendulumEnv
-    from smbrl.playground.pendulum_icem import VelocityBound
+    from smbrl.envs.cartpole_lenart import CartPoleEnv
+    from smbrl.playground.cartpole_lenart_icem import PositionBound
     from bsm.bayesian_regression.gaussian_processes import GaussianProcess
     from smbrl.dynamics_models.gps import ARD
-    from mbrl.utils.offline_data import PendulumOfflineData
+    from jaxtyping import Float, Array, Scalar
 
     configs = dict(
         alg_name=alg_name,
-        num_offline_data=num_offline_data,
         seed=seed,
         num_particles=num_particles,
         num_samples=num_samples,
@@ -66,30 +61,18 @@ def experiment(
         icem_horizon=icem_horizon,
         episode_length=episode_length,
         action_repeat=action_repeat,
-        max_abs_velocity=max_abs_velocity,
+        max_position=max_position,
         num_training_steps=num_training_steps,
-        env_margin_factor=env_margin_factor,
-        reward_source=reward_source,
         use_optimism=use_optimism,
         use_pessimism=use_pessimism,
         num_gpus=num_gpus
     )
 
-    num_offline_data = num_offline_data
-
     key = jr.PRNGKey(seed)
-    if num_offline_data > 0:
-        offline_data_gen = PendulumOfflineData()
-        offline_data_key, key = jr.split(key)
-        offline_data = offline_data_gen.sample_transitions(key=offline_data_key,
-                                                           num_samples=num_offline_data)
-        offline_data = Data(inputs=jnp.concatenate([offline_data.observation, offline_data.action], axis=-1),
-                            outputs=offline_data.next_observation,
-                            )
-    else:
-        offline_data = None
 
-    env = PendulumEnv()
+    offline_data = None
+
+    env = CartPoleEnv()
 
     model = GaussianProcess(
         kernel=ARD(input_dim=env.observation_size + env.action_size),
@@ -99,36 +82,53 @@ def experiment(
         logging_wandb=log_wandb)
 
     @chex.dataclass
-    class PendulumRewardParams:
-        control_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(0.02))
+    class CartPoleRewardParams:
+        control_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(0.01))
         angle_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(1.0))
-        target_angle: chex.Array = struct.field(default_factory=lambda: jnp.array(0.0))
+        pos_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(1.0))
+        vel_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(0.1))
+        target_angle: chex.Array = struct.field(default_factory=lambda: jnp.array(jnp.pi))
 
-    class PendulumReward(Reward):
-        def __init__(self, target_angle: float = 0.0):
-            super().__init__(x_dim=3, u_dim=1)
+    class CartPoleReward(Reward):
+        def __init__(self, target_angle: float = jnp.pi):
+            super().__init__(x_dim=5, u_dim=1)
             self.target_angle = jnp.array(target_angle)
+
+        @staticmethod
+        def cos_sin_to_angle_representation(cos_sin_angle: Float[Array, '2']) -> Scalar:
+            return jnp.arctan2(cos_sin_angle[1], cos_sin_angle[0])
+
+        def from_obs_to_state(self, state: Float[Array, '5']) -> Float[Array, '4']:
+            assert state.shape == (5,)
+            position, cos, sin, linear_velocity, angular_velocity = state[0], state[1], state[2], state[3], state[4]
+            angle = self.cos_sin_to_angle_representation(jnp.array([cos, sin]))
+            return jnp.array([position, angle, linear_velocity, angular_velocity])
 
         def __call__(self,
                      x: chex.Array,
                      u: chex.Array,
-                     reward_params: PendulumRewardParams,
+                     reward_params: CartPoleRewardParams,
                      x_next: chex.Array | None = None) -> Tuple[Distribution, RewardParams]:
             chex.assert_shape(x, (self.x_dim,))
             chex.assert_shape(u, (self.u_dim,))
             chex.assert_shape(x_next, (self.x_dim,))
             # get intrinsic reward out
-            theta, omega = jnp.arctan2(x[1], x[0]), x[-1]
+            x_compressed = self.from_obs_to_state(x)
+            position, angle = x_compressed[0], x_compressed[1]
+            linear_velocity, angular_velocity = x_compressed[2], x_compressed[3]
+
             target_angle = reward_params.target_angle
-            diff_th = theta - target_angle
+            diff_th = angle - target_angle
             diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
-            reward = -(reward_params.angle_cost * diff_th ** 2 +
-                       0.1 * omega ** 2) - reward_params.control_cost * u ** 2
+            reward = -(reward_params.angle_cost * diff_th ** 2 + reward_params.pos_cost * position ** 2 +
+                       reward_params.vel_cost * (
+                               linear_velocity ** 2 + angular_velocity ** 2)) - reward_params.control_cost * u[
+                         0] ** 2
             reward = reward.squeeze()
             return Normal(loc=reward, scale=jnp.zeros_like(reward)), reward_params
 
-        def init_params(self, key: chex.PRNGKey) -> PendulumRewardParams:
-            default_reward_params = PendulumRewardParams()
+        def init_params(self, key: chex.PRNGKey) -> CartPoleRewardParams:
+            default_reward_params = CartPoleRewardParams()
             return default_reward_params.replace(target_angle=self.target_angle)
 
     icem_params = iCemParams(
@@ -147,16 +147,15 @@ def experiment(
         raise NotImplementedError
 
     agent = alg(
-        env=PendulumEnv(margin_factor=env_margin_factor, reward_source=reward_source),
+        env=CartPoleEnv(),
         model=model,
         episode_length=episode_length,
         action_repeat=action_repeat,
-        cost_fn=VelocityBound(horizon=icem_horizon,
-                              max_abs_velocity=max_abs_velocity,
+        cost_fn=PositionBound(horizon=icem_horizon,
+                              max_position=max_position,
                               violation_eps=0.0, ),
-        test_tasks=[Task(reward=PendulumReward(), name='Swing up', env=env),
-                    # Task(reward=PendulumReward(), name='Balance', env=PendulumEnvBalance()),
-                    Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
+        test_tasks=[Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
+                    Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
                     ],
         predict_difference=True,
         num_training_steps=constant_schedule(num_training_steps),
@@ -205,7 +204,6 @@ def main(args):
         entity_name=args.entity_name,
         alg_name=args.alg_name,
         action_repeat=args.action_repeat,
-        num_offline_data=args.num_offline_data,
         num_particles=args.num_particles,
         num_samples=args.num_samples,
         alpha=args.alpha,
@@ -214,10 +212,8 @@ def main(args):
         lambda_constraint=args.lambda_constraint,
         icem_horizon=args.icem_horizon,
         episode_length=args.episode_length,
-        max_abs_velocity=args.max_abs_velocity,
+        max_position=args.max_position,
         num_training_steps=args.num_training_steps,
-        env_margin_factor=args.env_margin_factor,
-        reward_source=args.reward_source,
         use_optimism=bool(args.use_optimism),
         use_pessimism=bool(args.use_pessimism),
         log_wandb=bool(args.log_wandb),
@@ -236,7 +232,6 @@ if __name__ == '__main__':
     parser.add_argument('--project_name', type=str, default='ActSafeTest')
     parser.add_argument('--alg_name', type=str, default='ActSafe')
     parser.add_argument('--entity_name', type=str, default='trevenl')
-    parser.add_argument('--num_offline_data', type=int, default=0)
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)
     parser.add_argument('--alpha', type=float, default=0.2)
@@ -246,10 +241,8 @@ if __name__ == '__main__':
     parser.add_argument('--icem_horizon', type=int, default=20)
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
-    parser.add_argument('--max_abs_velocity', type=float, default=6.0)
+    parser.add_argument('--max_position', type=float, default=0.5)
     parser.add_argument('--num_training_steps', type=int, default=1_000)
-    parser.add_argument('--env_margin_factor', type=float, default=10.0)
-    parser.add_argument('--reward_source', type=str, default='gym')
     parser.add_argument('--use_optimism', type=int, default=1)
     parser.add_argument('--use_pessimism', type=int, default=1)
     parser.add_argument('--log_wandb', type=int, default=1)
