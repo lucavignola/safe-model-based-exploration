@@ -1,7 +1,7 @@
 import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 
-PROJECT_NAME = 'PendulumGP11Sept17_00_GPU'
+PROJECT_NAME = 'PendulumGP11Sept18_00_GPU'
 ENTITY = 'trevenl'
 NUM_GPUS = 1
 
@@ -13,7 +13,6 @@ _applicable_configs = {
     'seed': list(range(5)),
     'entity': [ENTITY],
     'num_gpus': [NUM_GPUS],
-    'function_norm': [1.0, 2.0, 5.0, ],
     'num_particles': [20, ],
     'num_samples': [1000, ],
     'lambda_constraint': [1e7],

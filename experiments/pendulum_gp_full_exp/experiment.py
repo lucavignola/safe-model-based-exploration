@@ -103,7 +103,7 @@ def experiment(
         output_dim=env.observation_size,
         output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
         logging_wandb=log_wandb,
-        f_norm_bound=function_norm * jnp.ones(shape=(env.observation_size,)),
+        f_norm_bound=jnp.array([1.0, 1.0, 6.0]),  # Computed that for action repeat = 2
         beta=None,
         num_training_steps=constant_schedule(1000)
     )
