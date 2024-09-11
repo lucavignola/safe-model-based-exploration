@@ -120,7 +120,7 @@ class PositionBound(AbstractCost):
 
 if __name__ == '__main__':
 
-    action_repeat = 1
+    action_repeat = 2
     horizon = 20
     optimizer = iCemTO(
         horizon=horizon,

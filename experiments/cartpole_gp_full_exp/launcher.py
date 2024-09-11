@@ -1,13 +1,15 @@
 import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 
-PROJECT_NAME = 'CartPoleGP11Sept11_00_GPU'
+PROJECT_NAME = 'CartPoleGP11Sept12_00_GPU'
 ENTITY = 'trevenl'
 NUM_GPUS = 1
 
 _applicable_configs = {
     'project_name': [PROJECT_NAME],
-    'num_training_steps': [1_000],
+    'num_training_steps': [2_000],
+    'episode_length': [100, ],
+    'action_repeat': [1, ],
     'seed': list(range(5)),
     'entity': [ENTITY],
     'num_gpus': [NUM_GPUS],
