@@ -275,22 +275,48 @@ class SafeModelBasedAgent:
         folder_name = os.path.join(folder_name, f'episode_{episode_idx}')
         create_folder(folder_name)
 
-        if save_agent:
+        if (not self.log_to_wandb) and save_agent:
             # Saving data to a pickle file
-            with open(os.path.join(folder_name, f'data_episode_{episode_idx}.pkl'), 'wb') as file:
+            with open(os.path.join(folder_name, 'data.pkl'), 'wb') as file:
                 pickle.dump(data, file)
 
-            with open(os.path.join(folder_name, f'model_state_episode_{episode_idx}.pkl'), 'wb') as file:
+            with open(os.path.join(folder_name, 'model_state.pkl'), 'wb') as file:
                 pickle.dump(model_state, file)
 
-            with open(os.path.join(folder_name, f'exploration_trajectory_episode_{episode_idx}.pkl'), 'wb') as file:
+            with open(os.path.join(folder_name, 'exploration_trajectory.pkl'), 'wb') as file:
+                pickle.dump(ExplorationTrajectory(states=exploration_states, actions=exploration_actions,
+                                                  intrinsic_rewards=intrinsic_rewards,
+                                                  extrinsic_rewards=extrinsic_rewards), file)
+
+            with open(os.path.join(folder_name, 'task_outputs.pkl'), 'wb') as file:
+                pickle.dump(task_outputs, file)
+
+        if self.log_to_wandb and save_agent:
+            folder_name = os.path.join(wandb.run.dir, 'saved_data', f'episode_{episode_idx}')
+            create_folder(folder_name)
+
+            # Saving data to a pickle file
+            with open(os.path.join(folder_name, 'data.pkl'), 'wb') as file:
+                pickle.dump(data, file)
+            wandb.save(os.path.join(folder_name, 'data.pkl'), wandb.run.dir)
+
+            with open(os.path.join(folder_name, 'model_state.pkl'), 'wb') as file:
+                pickle.dump(model_state, file)
+
+            wandb.save(os.path.join(folder_name, 'model_state.pkl'), wandb.run.dir)
+
+            with open(os.path.join(folder_name, 'exploration_trajectory.pkl'), 'wb') as file:
                 pickle.dump(ExplorationTrajectory(states=exploration_states, actions=exploration_actions,
                                                   intrinsic_rewards=intrinsic_rewards,
                                                   extrinsic_rewards=extrinsic_rewards,
                                                   ), file)
 
-            with open(os.path.join(folder_name, f'task_outputs_episode_{episode_idx}.pkl'), 'wb') as file:
+            wandb.save(os.path.join(folder_name, 'exploration_trajectory.pkl'), wandb.run.dir)
+
+            with open(os.path.join(folder_name, 'task_outputs.pkl'), 'wb') as file:
                 pickle.dump(task_outputs, file)
+
+            wandb.save(os.path.join(folder_name, 'task_outputs.pkl'), wandb.run.dir)
 
         return model_state, data
 
