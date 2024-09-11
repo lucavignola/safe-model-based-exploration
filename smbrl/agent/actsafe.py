@@ -261,6 +261,7 @@ class SafeModelBasedAgent:
             task_metrics = task_output[-1]
             task_outputs.append(task_output[:-1])
             if self.log_to_wandb:
+                task_metrics['episode_idx'] = episode_idx
                 wandb.log(task_metrics)
             else:
                 print(task_metrics)
