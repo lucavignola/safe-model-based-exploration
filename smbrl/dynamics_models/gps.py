@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 import jax.random as jr
+import optax
 import wandb
 from jax import vmap
 from bsm.bayesian_regression.gaussian_processes.kernels import Kernel
@@ -27,6 +28,7 @@ class ARD(Kernel):
 
 if __name__ == '__main__':
     from bsm.bayesian_regression.gaussian_processes import GaussianProcess
+    from bsm.statistical_model.gp_statistical_model import GPStatisticalModel
     import time
     import matplotlib.pyplot as plt
 
@@ -42,7 +44,7 @@ if __name__ == '__main__':
         noise_level = 0.1
         d_l, d_u = 0, 10
         xs = jnp.linspace(d_l, d_u, 64).reshape(-1, 1)
-        ys = jnp.concatenate([jnp.sin(2 *xs) + jnp.sin(3 *xs), jnp.cos(3 * xs)], axis=1)
+        ys = jnp.concatenate([jnp.sin(2 * xs) + jnp.sin(3 * xs), jnp.cos(3 * xs)], axis=1)
         ys = ys + noise_level * jr.normal(key=jr.PRNGKey(0), shape=ys.shape)
         data_std = noise_level * jnp.ones(shape=(output_dim,))
         data = Data(inputs=xs, outputs=ys)
@@ -63,13 +65,17 @@ if __name__ == '__main__':
 
     logging = False
     num_particles = 10
-    model = GaussianProcess(
+    model = GPStatisticalModel(
         kernel=ARD(input_dim=input_dim),
         input_dim=input_dim,
         output_dim=output_dim,
         output_stds=data_std,
-        logging_wandb=False)
-    model_state = model.init(model.key)
+        logging_wandb=False,
+        f_norm_bound=3 * jnp.array([2.0, 3.0,]),
+        beta=None,
+        num_training_steps=optax.constant_schedule(1000)
+    )
+    model_state = model.init(jr.PRNGKey(0))
     start_time = time.time()
     print('Starting with training')
     if logging:
@@ -78,26 +84,28 @@ if __name__ == '__main__':
             group='test group',
         )
 
-    model_state = model.fit_model(data=data, num_training_steps=1000, model_state=model_state)
+    # model_state = model.update(data=data, model_state=model_state)
     print(f'Training time: {time.time() - start_time:.2f} seconds')
-    model_state = model.fit_model(data=data, num_training_steps=1000, model_state=model_state)
+    model_state = model.update(data=data, stats_model_state=model_state)
 
     if example == '1d_to_2d':
         test_xs = jnp.linspace(-5, 15, 1000).reshape(-1, 1)
-        preds = vmap(model.posterior, in_axes=(0, None))(test_xs, model_state)[0]
-        pred_means = preds.mean()
-        epistemic_stds = preds.scale
+        preds = model.predict_batch(test_xs, model_state)
         test_ys = jnp.concatenate([jnp.sin(2 * test_xs) + jnp.sin(3 * test_xs), jnp.cos(3 * test_xs)], axis=1)
 
         for j in range(output_dim):
             plt.scatter(xs.reshape(-1), ys[:, j], label='Data', color='red')
-            plt.plot(test_xs, pred_means[:, j], label='Mean', color='blue')
+            plt.plot(test_xs, preds.mean[:, j], label='Mean', color='blue')
             plt.fill_between(test_xs.reshape(-1),
-                             (pred_means[:, j] - 2 * epistemic_stds[:, j]).reshape(-1),
-                             (pred_means[:, j] + 2 * epistemic_stds[:, j]).reshape(-1),
+                             (preds.mean[:, j] - preds.statistical_model_state.beta[j] * preds.epistemic_std[:,
+                                                                                         j]).reshape(-1),
+                             (preds.mean[:, j] + preds.statistical_model_state.beta[j] * preds.epistemic_std[:,
+                                                                                         j]).reshape(
+                                 -1),
                              label=r'$2\sigma$', alpha=0.3, color='blue')
             handles, labels = plt.gca().get_legend_handles_labels()
             plt.plot(test_xs.reshape(-1), test_ys[:, j], label='True', color='green')
             by_label = dict(zip(labels, handles))
             plt.legend(by_label.values(), by_label.keys())
+            plt.savefig(f'gp_{j}.pdf')
             plt.show()

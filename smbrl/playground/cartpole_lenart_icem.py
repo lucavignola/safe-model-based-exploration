@@ -120,7 +120,7 @@ class PositionBound(AbstractCost):
 
 if __name__ == '__main__':
 
-    action_repeat = 2
+    action_repeat = 1
     horizon = 20
     optimizer = iCemTO(
         horizon=horizon,
@@ -133,7 +133,7 @@ if __name__ == '__main__':
                               num_particles=1, ),
         system=ActionRepeatWrapper(action_repeat=action_repeat, system=CartPoleSystem()),
         cost_fn=PositionBound(horizon=horizon,
-                              max_position=0.5,
+                              max_position=0.5 - 1e-3,
                               violation_eps=0.0, ),
     )
 
@@ -190,3 +190,9 @@ if __name__ == '__main__':
 
     with open('save_trajectory.pkl', 'wb') as file:
         pickle.dump(all_states, file)
+
+
+    import numpy as np
+
+    total_reward = np.sum(np.array(all_rewards))
+    print(f'Total reward: {total_reward}')

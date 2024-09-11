@@ -4,7 +4,7 @@ import chex
 import jax.numpy as jnp
 import jax.random
 import jax.random as jr
-from bsm.bayesian_regression.bayesian_regression_model import BayesianRegressionModel
+from bsm.statistical_model import StatisticalModel
 from bsm.utils.type_aliases import ModelState
 from distrax import Distribution, Normal
 from jaxtyping import Float, Array, Scalar
@@ -24,7 +24,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
     def __init__(self,
                  x_dim: int,
                  u_dim: int,
-                 model: BayesianRegressionModel,
+                 model: StatisticalModel,
                  use_log: bool = True,
                  scale_with_aleatoric_std: bool = True,
                  aleatoric_noise_in_prediction: bool = True,
@@ -65,13 +65,13 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         # Create state-action pair
         z = jnp.concatenate([x, u])
         next_key, key_sample_x_next = jr.split(dynamics_params.key)
-        dist_f, dist_y = self.model.posterior(z, dynamics_params.model_state)
-        epistemic_std, aleatoric_std = dist_f.stddev(), dist_y.aleatoric_std()
+        pred = self.model(z, dynamics_params.model_state)
+        epistemic_std, aleatoric_std = pred.epistemic_std, pred.aleatoric_std
         x_next = x
         if self.predict_difference:
-            x_next += dist_f.sample(seed=key_sample_x_next)
+            x_next += pred.mean + pred.epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
         else:
-            x_next = dist_f.sample(seed=key_sample_x_next)
+            x_next = pred.mean + pred.epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
 
         intrinsic_reward = self.get_intrinsic_reward(epistemic_std, aleatoric_std)
         intrinsic_reward = jnp.atleast_1d(intrinsic_reward)

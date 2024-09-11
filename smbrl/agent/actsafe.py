@@ -9,7 +9,9 @@ import jax.random as jr
 import jax.tree as jt
 from brax.envs import Env as BraxEnv
 from brax.envs import State
-from bsm.bayesian_regression.bayesian_regression_model import BayesianRegressionModel
+
+from bsm.statistical_model import StatisticalModel, GPStatisticalModel
+
 from bsm.utils.type_aliases import ModelState
 from bsm.utils.normalization import Data
 from distrax import Distribution, Normal
@@ -34,7 +36,7 @@ class Task(NamedTuple):
 class SafeModelBasedAgent:
     def __init__(self,
                  env: BraxEnv,
-                 model: BayesianRegressionModel,
+                 model: StatisticalModel,
                  episode_length: int,
                  action_repeat: int,
                  cost_fn: AbstractCost,
@@ -52,7 +54,7 @@ class SafeModelBasedAgent:
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
         self.env = env
-        if isinstance(model, GaussianProcess):
+        if isinstance(model, GPStatisticalModel):
             jax.config.update("jax_enable_x64", True)
         self.model = model
         self.episode_length = episode_length
@@ -78,9 +80,8 @@ class SafeModelBasedAgent:
                              model_state: ModelState,
                              data: Data,
                              episode_idx: int) -> ModelState:
-        model_state = self.model.fit_model(data=data,
-                                           num_training_steps=self.num_training_steps(episode_idx),
-                                           model_state=model_state)
+        model_state = self.model.update(data=data,
+                                        stats_model_state=model_state)
         return model_state
 
     def test_a_task(self,
@@ -198,8 +199,8 @@ class SafeModelBasedAgent:
                 extrinsic_rewards.append(env_state.reward)
             # Calculate extrinsic reward
             z = jnp.concatenate([env_state.obs, action])
-            dist_f, dist_y = self.model.posterior(z, model_state)
-            epistemic_std, aleatoric_std = dist_f.stddev(), dist_y.aleatoric_std()
+            pred = self.model(z, model_state)
+            epistemic_std, aleatoric_std = pred.epistemic_std, pred.aleatoric_std
             intrinsic_reward = learned_system.dynamics.get_intrinsic_reward(epistemic_std=epistemic_std,
                                                                             aleatoric_std=aleatoric_std)
             intrinsic_rewards.append(intrinsic_reward)
@@ -364,30 +365,44 @@ if __name__ == '__main__':
     from smbrl.envs.pendulum import PendulumEnv
     from smbrl.playground.pendulum_icem import VelocityBound
     from bsm.bayesian_regression.bayesian_neural_networks import DeterministicEnsemble
+    from smbrl.dynamics_models.gps import ARD
+    import optax
 
     from mbrl.utils.offline_data import PendulumOfflineData
 
-    num_offline_data = 100
+    # num_offline_data = 100
     offline_data_gen = PendulumOfflineData()
     key = jr.PRNGKey(0)
-    offline_data_key, key = jr.split(key)
-    offline_data = offline_data_gen.sample_transitions(key=offline_data_key,
-                                                       num_samples=num_offline_data)
-
-    offline_data = Data(inputs=jnp.concatenate([offline_data.observation, offline_data.action], axis=-1),
-                        outputs=offline_data.next_observation,
-                        )
+    offline_data = None
+    # offline_data_key, key = jr.split(key)
+    # offline_data = offline_data_gen.sample_transitions(key=offline_data_key,
+    #                                                    num_samples=num_offline_data)
+    #
+    # offline_data = Data(inputs=jnp.concatenate([offline_data.observation, offline_data.action], axis=-1),
+    #                     outputs=offline_data.next_observation,
+    #                     )
 
     env = PendulumEnv()
     log_wandb = True
 
-    model = DeterministicEnsemble(
-        features=(256, 256),
-        num_particles=5,
+    model = GPStatisticalModel(
+        kernel=ARD(input_dim=env.observation_size + env.action_size),
         input_dim=env.observation_size + env.action_size,
         output_dim=env.observation_size,
         output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
-        logging_wandb=log_wandb)
+        logging_wandb=False,
+        f_norm_bound=3 * jnp.ones(shape=(env.observation_size,)),
+        beta=None,
+        num_training_steps=optax.constant_schedule(1000)
+    )
+
+    # model = DeterministicEnsemble(
+    #     features=(256, 256),
+    #     num_particles=5,
+    #     input_dim=env.observation_size + env.action_size,
+    #     output_dim=env.observation_size,
+    #     output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
+    #     logging_wandb=log_wandb)
 
     icem_horizon = 20
 
