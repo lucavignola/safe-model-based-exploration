@@ -61,6 +61,8 @@ class SafeModelBasedAgent:
         self.cost_fn = cost_fn
         self.cost_fn_env = copy.deepcopy(cost_fn)
         self.cost_fn_env.horizon = self.episode_length
+        if hasattr(self.cost_fn_env, 'violation_eps'):
+            self.cost_fn_env.violation_eps = 0
         self.test_tasks = test_tasks
 
         self.use_optimism = use_optimism
