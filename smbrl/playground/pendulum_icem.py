@@ -113,9 +113,10 @@ class VelocityBound(AbstractCost):
                  actions: Float[Array, 'horizon action_dim'],
                  ) -> Scalar:
         angular_velocity = states[:, -1]
-        trajectory_constraint = jnp.maximum(jnp.abs(angular_velocity) - self.max_abs_velocity, -self.violation_eps)
+        trajectory_constraint = jnp.maximum(jnp.abs(angular_velocity) - (self.max_abs_velocity - self.violation_eps),
+                                            0.0)
         assert trajectory_constraint.shape == (self.horizon,)
-        return jnp.mean(trajectory_constraint)
+        return jnp.sum(trajectory_constraint)
 
 
 class VelocityBoundBinary(AbstractCost):
@@ -132,7 +133,7 @@ class VelocityBoundBinary(AbstractCost):
         trajectory_constraint = jnp.abs(angular_velocity) > self.max_abs_velocity - self.violation_eps
         # trajectory_constraint = jnp.maximum(jnp.abs(angular_velocity) - self.max_abs_velocity, -self.violation_eps)
         assert trajectory_constraint.shape == (self.horizon,)
-        return jnp.mean(trajectory_constraint)
+        return jnp.sum(trajectory_constraint)
 
 
 if __name__ == '__main__':
@@ -151,7 +152,7 @@ if __name__ == '__main__':
         horizon=horizon,
         action_dim=1,
         key=jr.PRNGKey(0),
-        opt_params=iCemParams(exponent=2.0,
+        opt_params=iCemParams(exponent=0.0,
                               num_samples=500,
                               alpha=0.2,
                               num_steps=5,
