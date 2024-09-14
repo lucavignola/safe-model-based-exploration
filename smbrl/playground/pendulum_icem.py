@@ -118,6 +118,23 @@ class VelocityBound(AbstractCost):
         return jnp.mean(trajectory_constraint)
 
 
+class VelocityBoundBinary(AbstractCost):
+    def __init__(self, *args, max_abs_velocity: float = 4.0, violation_eps=1e-3, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_abs_velocity = max_abs_velocity
+        self.violation_eps = violation_eps
+
+    def __call__(self,
+                 states: Float[Array, 'horizon observation_dim'],
+                 actions: Float[Array, 'horizon action_dim'],
+                 ) -> Scalar:
+        angular_velocity = states[:, -1]
+        trajectory_constraint = jnp.abs(angular_velocity) > self.max_abs_velocity - self.violation_eps
+        # trajectory_constraint = jnp.maximum(jnp.abs(angular_velocity) - self.max_abs_velocity, -self.violation_eps)
+        assert trajectory_constraint.shape == (self.horizon,)
+        return jnp.mean(trajectory_constraint)
+
+
 if __name__ == '__main__':
 
     action_repeat = 2

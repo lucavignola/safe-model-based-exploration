@@ -34,10 +34,13 @@ def experiment(
         num_gpus: int = 0,
         function_norm: float = 1.0,
         num_elites: int = 50,
+        beta: float = 3.0,
 ):
+    violation_eps = 0.1
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
+
 
     import jax.numpy as jnp
     import jax.random as jr
@@ -53,9 +56,33 @@ def experiment(
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.pendulum import PendulumEnv
     from smbrl.playground.pendulum_icem import VelocityBound
+    from smbrl.playground.pendulum_icem import VelocityBoundBinary
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
-    from mbrl.utils.offline_data import PendulumOfflineData
+
+    from mbrl.utils.offline_data import OfflineData
+
+    class PendulumOfflineData(OfflineData):
+        def __init__(self, max_velocity: float, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.max_velocity = max_velocity
+
+        def _sample_states(self,
+                           key: chex.PRNGKey,
+                           num_samples: int):
+            key_angle, key_angular_velocity = jr.split(key)
+            angles = jr.uniform(key_angle, shape=(num_samples,), minval=-jnp.pi, maxval=jnp.pi)
+            cos, sin = jnp.cos(angles), jnp.sin(angles)
+            angular_velocity = jr.uniform(key_angular_velocity, shape=(num_samples,),
+                                          minval=-10.0,
+                                          maxval=10.0)
+            return jnp.stack([cos, sin, angular_velocity], axis=-1)
+
+        def _sample_actions(self,
+                            key: chex.PRNGKey,
+                            num_samples: int):
+            actions = jr.uniform(key, shape=(num_samples, 1), minval=-1, maxval=1)
+            return actions
 
     configs = dict(
         alg_name=alg_name,
@@ -79,21 +106,13 @@ def experiment(
         num_gpus=num_gpus,
         function_norm=function_norm,
         num_elites=num_elites,
+        violation_eps=violation_eps,
+        beta=beta,
     )
 
     num_offline_data = num_offline_data
 
     key = jr.PRNGKey(seed)
-    if num_offline_data > 0:
-        offline_data_gen = PendulumOfflineData()
-        offline_data_key, key = jr.split(key)
-        offline_data = offline_data_gen.sample_transitions(key=offline_data_key,
-                                                           num_samples=num_offline_data)
-        offline_data = Data(inputs=jnp.concatenate([offline_data.observation, offline_data.action], axis=-1),
-                            outputs=offline_data.next_observation,
-                            )
-    else:
-        offline_data = None
 
     env = PendulumEnv()
 
@@ -103,8 +122,7 @@ def experiment(
         output_dim=env.observation_size,
         output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
         logging_wandb=log_wandb,
-        f_norm_bound=jnp.array([1.0, 1.0, 6.0]),  # Computed that for action repeat = 2
-        beta=None,
+        beta=jnp.ones(3) * beta,
         num_training_steps=constant_schedule(1000)
     )
 
@@ -141,6 +159,20 @@ def experiment(
             default_reward_params = PendulumRewardParams()
             return default_reward_params.replace(target_angle=self.target_angle)
 
+
+    if alg_name == 'SafeHUCRL':
+        alg = SafeHUCRL
+    elif alg_name == 'ActSafe':
+        alg = ActSafeAgent
+    elif alg_name == 'HUCRL':
+        alg = SafeHUCRL
+        lambda_constraint = 0.0
+    elif alg_name == 'OPAX':
+        alg = ActSafeAgent
+        lambda_constraint = 0.0
+    else:
+        raise NotImplementedError
+
     icem_params = iCemParams(
         num_particles=num_particles,
         num_samples=num_samples,
@@ -150,25 +182,21 @@ def experiment(
         exponent=exponent,
         lambda_constraint=lambda_constraint,
     )
-    if alg_name == 'SafeHUCRL':
-        alg = SafeHUCRL
-    elif alg_name == 'ActSafe':
-        alg = ActSafeAgent
-    else:
-        raise NotImplementedError
+
+    cost_fn = VelocityBoundBinary(horizon=icem_horizon,
+                                  max_abs_velocity=max_abs_velocity,
+                                  violation_eps=violation_eps, )
 
     agent = alg(
         env=PendulumEnv(margin_factor=env_margin_factor, reward_source=reward_source),
         model=model,
         episode_length=episode_length,
         action_repeat=action_repeat,
-        cost_fn=VelocityBound(horizon=icem_horizon,
-                              max_abs_velocity=max_abs_velocity,
-                              violation_eps=0.0, ),
-        test_tasks=[Task(reward=PendulumReward(), name='Swing up', env=env),
-                    # Task(reward=PendulumReward(), name='Balance', env=PendulumEnvBalance()),
-                    Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
-                    ],
+        cost_fn=cost_fn,
+        test_tasks=[
+            Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
+            Task(reward=PendulumReward(), name='Swing up', env=env),
+        ],
         predict_difference=True,
         num_training_steps=constant_schedule(num_training_steps),
         icem_horizon=icem_horizon,
@@ -178,17 +206,39 @@ def experiment(
         use_optimism=use_optimism,
     )
 
-    model_state = model.init(jr.PRNGKey(seed))
     if log_wandb:
         wandb.init(project=project_name,
                    config=configs,
                    entity=entity_name,
+                   dir=logs_dir,
                    )
-    agent.run_episodes(num_episodes=20,
+
+    model_state = model.init(jr.PRNGKey(seed))
+    if num_offline_data > 0:
+        print('collecting offline data')
+        offline_data_gen = PendulumOfflineData(env=env, max_velocity=max_abs_velocity)
+        offline_data_key, key = jr.split(key)
+        offline_data = offline_data_gen.sample_transitions(key=offline_data_key,
+                                                           num_samples=num_offline_data)
+        offline_data = Data(inputs=jnp.concatenate([offline_data.observation, offline_data.action], axis=-1),
+                            outputs=offline_data.next_observation - offline_data.observation,
+                            )
+        print('model state before update: ', model_state)
+        updated_model_state = model.update(stats_model_state=model_state, data=offline_data)
+        new_ms = model_state.model_state.replace(
+            data_stats=updated_model_state.model_state.data_stats,
+            params=updated_model_state.model_state.params,
+        )
+        model_state = model_state.replace(
+            beta=updated_model_state.beta,
+            model_state=new_ms,
+        )
+        print('model state after update: ', model_state)
+
+    agent.run_episodes(num_episodes=10,
                        key=key,
                        model_state=model_state,
-                       folder_name=f'{alg_name}/{exp_hash}/{logs_dir}/',
-                       data=offline_data,
+                       folder_name=f'{logs_dir}/{alg_name}/{exp_hash}/',
                        )
     wandb.finish()
 
@@ -239,6 +289,7 @@ def main(args):
         exp_hash=exp_hash,
         function_norm=args.function_norm,
         num_elites=args.num_elites,
+        beta=args.beta,
     )
 
 
@@ -249,8 +300,8 @@ if __name__ == '__main__':
     parser.add_argument('--logs_dir', type=str, default='logs')
     parser.add_argument('--project_name', type=str, default='ActSafeTest')
     parser.add_argument('--alg_name', type=str, default='ActSafe')
-    parser.add_argument('--entity_name', type=str, default='trevenl')
-    parser.add_argument('--num_offline_data', type=int, default=0)
+    parser.add_argument('--entity_name', type=str, default='sukhijab')
+    parser.add_argument('--num_offline_data', type=int, default=100)
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)
     parser.add_argument('--alpha', type=float, default=0.2)
@@ -270,6 +321,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_gpus', type=int, default=0)
     parser.add_argument('--function_norm', type=float, default=1.0)
     parser.add_argument('--num_elites', type=int, default=100)
+    parser.add_argument('--beta', type=float, default=3.0)
 
     parser.add_argument('--seed', type=int, default=0)
 
