@@ -150,6 +150,13 @@ class SafeModelBasedAgent:
         else:
             return self.test_tasks[self.train_task_index].reward
 
+    def get_train_env_state(self, rng: jax.Array) -> State:
+        if self.train_task_index == -1:
+            return self.env.reset(rng=rng)
+        else:
+            env = self.test_tasks[self.train_task_index].env
+            return env.reset(rng=rng)
+
     def simulate_on_true_env(self,
                              model_state: ModelState,
                              key: Key[Array, '2'], ) -> Tuple[
@@ -186,7 +193,7 @@ class SafeModelBasedAgent:
         system_params = optimizer_state.system_params.replace(dynamics_params=dynamics_params)
         optimizer_state = optimizer_state.replace(system_params=system_params)
 
-        env_state = self.env.reset(rng=key)
+        env_state = self.get_train_env_state(rng=key)
 
         collected_states = [env_state]
         actions = []
