@@ -10,8 +10,9 @@ from bsm.utils.normalization import Data
 
 
 class ARD(Kernel):
-    def __init__(self, input_dim: int):
+    def __init__(self, input_dim: int, length_scale: float | None = None):
         super().__init__(input_dim)
+        self.length_scale = length_scale
 
     def _apply(self,
                x1: Float[Array, 'input_dim'],
@@ -23,7 +24,13 @@ class ARD(Kernel):
         return jnp.exp(-0.5 * jnp.sum((x1 - x2) ** 2 / length_scale ** 2))
 
     def init(self, key: Key[Array, '2']) -> PyTree:
-        return {'pseudo_length_scale': jr.normal(key, shape=(self.input_dim,))}
+        if self.length_scale is None:
+            return {'pseudo_length_scale': jr.normal(key, shape=(self.input_dim,))}
+        else:
+            assert self.length_scale > 0
+            length_scale = jnp.ones(self.input_dim) * self.length_scale
+            pseudo_length_scale = jnp.log(jnp.exp(length_scale) - 1)
+            return {'pseudo_length_scale': pseudo_length_scale}
 
 
 if __name__ == '__main__':
