@@ -44,7 +44,7 @@ def experiment(
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.cartpole_lenart import CartPoleEnv
-    from smbrl.playground.cartpole_lenart_icem import PositionBound
+    from smbrl.playground.cartpole_icem import PositionBound
     from bsm.bayesian_regression.gaussian_processes import GaussianProcess
     from smbrl.dynamics_models.gps import ARD
     from jaxtyping import Float, Array, Scalar

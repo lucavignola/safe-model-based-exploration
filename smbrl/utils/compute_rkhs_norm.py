@@ -34,10 +34,6 @@ def f(x):
 input_dim = 4
 output_dim = 1
 
-# def f(x: Float[Array, 'observation_size']) -> Scalar:
-#     return jnp.sin(x)
-
-
 kernel = ARD(input_dim=input_dim)
 
 # import jax
@@ -107,4 +103,4 @@ for i in range(300):
     norm_sq = ys.T @ first_step
     norm = jnp.sqrt(norm_sq)
 
-    print(f'Norm squared: {norm}')
+    print(f'Norm: {norm}')
