@@ -1,16 +1,17 @@
+from typing import NamedTuple
+from typing import Union, Optional
+
+import chex
+import jax
+import jax.numpy as jnp
+import jax.random as jr
+from brax.envs.base import State, Env
+from distrax import Normal
+from flax import struct
 from mbpo.systems import DynamicsParams, RewardParams
 from mbpo.systems.base_systems import System, SystemParams, SystemState
-from distrax import Normal
 from mbpo.systems.dynamics.base_dynamics import Dynamics
 from mbpo.systems.rewards.base_rewards import Reward
-import jax.random as jr
-import chex
-import jax.numpy as jnp
-import jax
-from typing import Union
-from typing import NamedTuple
-from flax import struct
-from brax.envs.base import State, Env
 
 
 @chex.dataclass
@@ -290,7 +291,8 @@ class BicycleCarModel(Dynamics):
         return x_dot
 
     def _compute_dx_kin(self, x, u, params: CarParams):
-        """Compute kinematics derivative for localized state.
+        """
+        Compute kinematics derivative for localized state.
         Inputs
         -----
         x: jnp.ndarray,
@@ -303,7 +305,7 @@ class BicycleCarModel(Dynamics):
         dx_kin: jnp.ndarray,
             shape = (6, ) -> derivative of x
 
-        Assumption: \dot{\delta} = 0.
+        Assumption: dot{delta} = 0.
         """
         p_x, p_y, theta, v_x, v_y, w = x[0], x[1], x[2], x[3], x[4], x[5]  # progress
         m = params.m
@@ -386,7 +388,7 @@ class BicycleCarModel(Dynamics):
         return dx
 
     def ode(self, x: jax.Array, u: jax.Array, params) -> jax.Array:
-        chex.assert_size(x, (self._x_dim, )) and chex.assert_size(u, (self.u_dim, ))
+        chex.assert_size(x, (self._x_dim,)) and chex.assert_size(u, (self.u_dim,))
         return self._ode(x, u, params)
 
     def init_params(self, key: chex.PRNGKey) -> DynamicsParams:
@@ -458,11 +460,11 @@ class RaceCarEnv(Env):
         return state
 
     def step(self, state: State, action: jax.Array) -> State:
-        next_state_dist = self.system.step(state.obs, action, state.pipeline_state)
+        next_state = self.system.step(state.obs, action, state.pipeline_state)
 
-        next_state = State(pipeline_state=next_state_dist.system_params,
-                           obs=next_state_dist.x_next.mean(),
-                           reward=next_state_dist.reward.mean(),
+        next_state = State(pipeline_state=next_state.system_params,
+                           obs=next_state.x_next,
+                           reward=next_state.reward,
                            done=state.done,
                            metrics=state.metrics,
                            info=state.info)
@@ -482,3 +484,132 @@ class RaceCarEnv(Env):
 
     def backend(self) -> str:
         return 'positional'
+
+
+def decode_angles(state: jnp.array, angle_idx: int) -> jnp.array:
+    """ Decodes the angle (theta) from sin(theta) and cos(theta)"""
+    assert angle_idx < state.shape[-1] - 1
+    theta = jnp.arctan2(state[..., angle_idx:angle_idx + 1],
+                        state[..., angle_idx + 1:angle_idx + 2])
+    state_decoded = jnp.concatenate([state[..., :angle_idx], theta, state[..., angle_idx + 2:]], axis=-1)
+    assert state_decoded.shape[-1] == state.shape[-1] - 1
+    return state_decoded
+
+
+def rotate_coordinates(state: jnp.array, encode_angle: bool = False) -> jnp.array:
+    x_pos, x_vel = state[..., 0:1], state[..., 3 + int(encode_angle): 4 + int(encode_angle)]
+    y_pos, y_vel = state[..., 1:2], state[:, 4 + int(encode_angle):5 + int(encode_angle)]
+    theta = state[..., 2: 3 + int(encode_angle)]
+    new_state = jnp.concatenate([y_pos, -x_pos, theta, y_vel, -x_vel, state[..., 5 + int(encode_angle):]],
+                                axis=-1)
+    assert state.shape == new_state.shape
+    return new_state
+
+
+def plot_rc_trajectory(traj: jnp.array, actions: Optional[jnp.array] = None, pos_domain_size: float = 5,
+                       show: bool = True, encode_angle: bool = False):
+    """ Plots the trajectory of the RC car """
+    if encode_angle:
+        traj = decode_angles(traj, 2)
+
+    import matplotlib.pyplot as plt
+    scale_factor = 1.5
+    if actions is None:
+        fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(scale_factor * 12, scale_factor * 8))
+    else:
+        fig, axes = plt.subplots(nrows=2, ncols=4, figsize=(scale_factor * 16, scale_factor * 8))
+    axes[0][0].set_xlim(-pos_domain_size, pos_domain_size)
+    axes[0][0].set_ylim(-pos_domain_size, pos_domain_size)
+    axes[0][0].scatter(0, 0)
+    # axes[0][0].plot(traj[:, 0], traj[:, 1])
+    axes[0][0].set_title('x-y')
+
+    # chaange x -> -y and y -> x
+    traj = rotate_coordinates(traj, encode_angle=False)
+
+    # Plot the velocity of the car as vectors
+    total_vel = jnp.sqrt(traj[:, 3] ** 2 + traj[:, 4] ** 2)
+    axes[0][0].quiver(traj[0:-1:3, 0], traj[0:-1:3, 1], traj[0:-1:3, 3], traj[0:-1:3, 4],
+                      total_vel[0:-1:3], cmap='jet', scale=20,
+                      headlength=2, headaxislength=2, headwidth=2, linewidth=0.2)
+
+    t = jnp.arange(traj.shape[0]) / 30.
+    # theta
+    axes[0][1].plot(t, traj[:, 2])
+    axes[0][1].set_xlabel('time')
+    axes[0][1].set_ylabel('theta')
+    axes[0][1].set_title('theta')
+
+    # angular velocity
+    axes[0][2].plot(t, traj[:, -1])
+    axes[0][2].set_xlabel('time')
+    axes[0][2].set_ylabel('angular velocity')
+    axes[0][2].set_title('angular velocity')
+
+    axes[1][0].plot(t, total_vel)
+    axes[1][0].set_xlabel('time')
+    axes[1][0].set_ylabel('total velocity')
+    axes[1][0].set_title('velocity')
+
+    # vel x
+    axes[1][1].plot(t, traj[:, 3])
+    axes[1][1].set_xlabel('time')
+    axes[1][1].set_ylabel('velocity x')
+    axes[1][1].set_title('velocity x')
+
+    axes[1][2].plot(t, traj[:, 4])
+    axes[1][2].set_xlabel('time')
+    axes[1][2].set_ylabel('velocity y')
+    axes[1][2].set_title('velocity y')
+
+    if actions is not None:
+        # steering
+        axes[0][3].plot(t[:actions.shape[0]], actions[:, 0])
+        axes[0][3].set_xlabel('time')
+        axes[0][3].set_ylabel('steer')
+        axes[0][3].set_title('steering')
+
+        # throttle
+        axes[1][3].plot(t[:actions.shape[0]], actions[:, 1])
+        axes[1][3].set_xlabel('time')
+        axes[1][3].set_ylabel('throttle')
+        axes[1][3].set_title('throttle')
+
+    fig.tight_layout()
+    if show:
+        fig.show()
+    return fig, axes
+
+
+if __name__ == '__main__':
+    import time
+    from jax import jit
+
+    ENCODE_ANGLE = True
+
+    env = RaceCarEnv()
+    t_start = time.time()
+    state = env.reset(rng=jr.PRNGKey(0))
+
+    traj = [state.obs]
+    rewards = []
+    actions = []
+
+    step_fn = jit(env.step)
+
+    for i in range(120):
+        t = i / 30.
+        a = jnp.array([- 0.5 * jnp.cos(1.0 * t), 0.8 / (t + 1)])
+        state = step_fn(state, a)
+
+        traj.append(state.obs)
+        actions.append(a)
+        rewards.append(state.reward)
+
+    duration = time.time() - t_start
+    print(f'Duration of trajectory sim {duration} sec')
+    traj = jnp.stack(traj)
+    actions = jnp.stack(actions)
+
+    plot_rc_trajectory(traj, actions, encode_angle=ENCODE_ANGLE)
+    print(traj[-1, :])

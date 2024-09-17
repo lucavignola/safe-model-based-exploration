@@ -13,18 +13,20 @@ from smbrl.optimizer.icem import iCemTO, iCemParams, AbstractCost
 
 
 if __name__ == '__main__':
+    from jax import jit
 
-    action_repeat = 2
+
+    action_repeat = 1
     horizon = 50
     optimizer = iCemTO(
         horizon=horizon,
         action_dim=1,
         key=jr.PRNGKey(0),
-        opt_params=iCemParams(exponent=0.25,
-                              num_samples=1000,
-                              num_elites=100,
-                              alpha=0.0,
-                              num_steps=10,
+        opt_params=iCemParams(exponent=1.0,
+                              num_samples=500,
+                              num_elites=50,
+                              alpha=0.2,
+                              num_steps=5,
                               num_particles=1, ),
         system=RaceCarSystem(),
         cost_fn=None,
@@ -42,11 +44,15 @@ if __name__ == '__main__':
 
     times = []
     first_times = time.time()
-    for i in range(500 // action_repeat):
+
+    step_fn = jit(system.step)
+    act_fn = jit(optimizer.act)
+
+    for i in range(200 // action_repeat):
         start_time = time.time()
-        action, optimizer_state = optimizer.act(obs, optimizer_state)
+        action, optimizer_state = act_fn(obs, optimizer_state)
         for _ in range(action_repeat):
-            sys_state = system.step(obs, action, system_params)
+            sys_state = step_fn(obs, action, system_params)
             obs, reward, system_params = sys_state.x_next, sys_state.reward, sys_state.system_params
         all_obs.append(obs)
         all_actions.append(action)
