@@ -680,7 +680,7 @@ class RCCar(Env):
         key_pos, key_theta, key_vel, key_obs = jax.random.split(rng, 4)
         init_pos = self._init_pose[:2] + jax.random.uniform(key_pos, shape=(2,), minval=-0.10, maxval=0.10)
         init_theta = self._init_pose[2:] + \
-                     jax.random.uniform(key_pos, shape=(1,), minval=-0.10 * jnp.pi, maxval=0.10 * jnp.pi)
+                     jax.random.uniform(key_theta, shape=(1,), minval=-0.10 * jnp.pi, maxval=0.10 * jnp.pi)
         init_vel = jnp.zeros((3,)) + jnp.array([0.005, 0.005, 0.02]) * jax.random.normal(key_vel, shape=(3,))
         init_state = jnp.concatenate([init_pos, init_theta, init_vel])
         init_state = self._state_to_obs(init_state, rng_key=key_obs)
