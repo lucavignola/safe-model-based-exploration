@@ -256,6 +256,13 @@ class SafeModelBasedAgent:
         exploration_states, exploration_actions, intrinsic_rewards, extrinsic_rewards, cost = self.simulate_on_true_env(
             model_state=model_state,
             key=key)
+
+        # import matplotlib.pyplot as plt
+        # plt.plot(exploration_states.obs[:, 0])
+        # plt.axhline(y=-0.5, color='r', linestyle='-')
+        # plt.axhline(y=0.5, color='r', linestyle='-')
+        # plt.show()
+
         if self.log_to_wandb:
             wandb.log({
                 'episode_idx': episode_idx,

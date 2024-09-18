@@ -1,7 +1,7 @@
 import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 
-PROJECT_NAME = 'CartPoleGP18Sept10_30_GPU'
+PROJECT_NAME = 'CartPoleGP18Sept15_30_GPU'
 ENTITY = 'trevenl'
 NUM_GPUS = 1
 
@@ -13,8 +13,11 @@ _applicable_configs = {
     'seed': list(range(5)),
     'entity': [ENTITY],
     'num_gpus': [NUM_GPUS],
-    'num_particles': [20],
-    'beta': [0.2, 2, 5, 10]
+    'num_particles': [20, ],
+    'beta': [0.05, 0.1, 1],
+    'use_precomputed_kernel_params': [1, ],
+    'use_function_norms': [1],
+    'icem_horizon': [50, ]
 }
 
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1]} \

@@ -32,6 +32,7 @@ def experiment(
         num_elites: int = 50,
         beta: float = 3.0,
         use_precomputed_kernel_params: bool = False,
+        use_function_norms: bool = False,
 ):
     violation_eps = 0.1
     if num_gpus == 0:
@@ -76,7 +77,8 @@ def experiment(
         num_elites=num_elites,
         violation_eps=violation_eps,
         beta=beta,
-        use_precomputed_kernel_params=use_precomputed_kernel_params
+        use_precomputed_kernel_params=use_precomputed_kernel_params,
+        use_function_norms=use_function_norms
     )
     if use_precomputed_kernel_params:
         import jax
@@ -102,7 +104,8 @@ def experiment(
                                dtype=jnp.float64),
                 std=jnp.array([0.22896878, 0.31788133, 0.32660905, 1.29298522, 1.11480673],
                               dtype=jnp.float64)))
-        function_norms = jnp.array([14.77733678, 13.75797717, 13.80373648, 16.40662952, 17.46610356], dtype=jnp.float64)
+        precomputed_function_norms = jnp.array([14.77733678, 13.75797717, 13.80373648, 16.40662952, 17.46610356],
+                                               dtype=jnp.float64)
 
     key = jr.PRNGKey(seed)
 
@@ -115,17 +118,31 @@ def experiment(
     else:
         num_training_steps = constant_schedule(1000)
 
-    model = GPStatisticalModel(
-        kernel=ARD(input_dim=env.observation_size + env.action_size),
-        input_dim=env.observation_size + env.action_size,
-        output_dim=env.observation_size,
-        output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
-        logging_wandb=log_wandb,
-        beta=jnp.ones(shape=(env.observation_size,)) * beta,
-        fixed_kernel_params=True,
-        normalization_stats=precomputed_normalization_stats,
-        num_training_steps=num_training_steps,
-    )
+    if use_function_norms:
+        model = GPStatisticalModel(
+            kernel=ARD(input_dim=env.observation_size + env.action_size),
+            input_dim=env.observation_size + env.action_size,
+            output_dim=env.observation_size,
+            output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
+            logging_wandb=log_wandb,
+            beta=None,
+            f_norm_bound=precomputed_function_norms * beta,
+            fixed_kernel_params=use_precomputed_kernel_params,
+            normalization_stats=precomputed_normalization_stats,
+            num_training_steps=num_training_steps,
+        )
+    else:
+        model = GPStatisticalModel(
+            kernel=ARD(input_dim=env.observation_size + env.action_size),
+            input_dim=env.observation_size + env.action_size,
+            output_dim=env.observation_size,
+            output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
+            logging_wandb=log_wandb,
+            beta=jnp.ones(shape=(env.observation_size,)) * beta,
+            fixed_kernel_params=use_precomputed_kernel_params,
+            normalization_stats=precomputed_normalization_stats,
+            num_training_steps=num_training_steps,
+        )
 
     @chex.dataclass
     class CartPoleRewardParams:
@@ -289,7 +306,8 @@ def main(args):
         function_norm=args.function_norm,
         num_elites=args.num_elites,
         beta=args.beta,
-        use_precomputed_kernel_params=bool(args.use_precomputed_kernel_params)
+        use_precomputed_kernel_params=bool(args.use_precomputed_kernel_params),
+        use_function_norms=bool(args.use_function_norms),
     )
 
 
@@ -304,10 +322,10 @@ if __name__ == '__main__':
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)
     parser.add_argument('--alpha', type=float, default=0.2)
-    parser.add_argument('--num_steps', type=int, default=5)
-    parser.add_argument('--exponent', type=float, default=0.2)
-    parser.add_argument('--lambda_constraint', type=float, default=1e6)
-    parser.add_argument('--icem_horizon', type=int, default=20)
+    parser.add_argument('--num_steps', type=int, default=10)
+    parser.add_argument('--exponent', type=float, default=1.0)
+    parser.add_argument('--lambda_constraint', type=float, default=1e9)
+    parser.add_argument('--icem_horizon', type=int, default=50)
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
     parser.add_argument('--max_position', type=float, default=0.5)
@@ -317,11 +335,12 @@ if __name__ == '__main__':
     parser.add_argument('--log_wandb', type=int, default=1)
     parser.add_argument('--num_gpus', type=int, default=0)
     parser.add_argument('--function_norm', type=float, default=1.0)
-    parser.add_argument('--num_elites', type=int, default=100)
-    parser.add_argument('--beta', type=float, default=3.0)
-    parser.add_argument('--use_precomputed_kernel_params', type=int, default=1)
+    parser.add_argument('--num_elites', type=int, default=50)
+    parser.add_argument('--beta', type=float, default=1.0)
+    parser.add_argument('--use_precomputed_kernel_params', type=int, default=0)
+    parser.add_argument('--use_function_norms', type=int, default=0)
 
-    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--seed', type=int, default=1)
 
     parser.add_argument('--exp_result_folder', type=str, default=None)
 
