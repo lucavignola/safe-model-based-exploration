@@ -54,12 +54,16 @@ def experiment(
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.pendulum import PendulumEnv
-    from smbrl.playground.pendulum_icem import VelocityBoundBinary
+    from smbrl.playground.pendulum_icem import VelocityBound
     from bsm.statistical_model import GPStatisticalModel
-
     from smbrl.dynamics_models.gps import ARD
 
     from mbrl.utils.offline_data import OfflineData
+
+    env = PendulumEnv()
+
+    key = jr.PRNGKey(seed)
+    key, offline_data_key = jr.split(key, 2)
 
     class PendulumOfflineData(OfflineData):
         def __init__(self, max_velocity: float, *args, **kwargs):
@@ -73,8 +77,8 @@ def experiment(
             angles = jr.uniform(key_angle, shape=(num_samples,), minval=-jnp.pi, maxval=jnp.pi)
             cos, sin = jnp.cos(angles), jnp.sin(angles)
             angular_velocity = jr.uniform(key_angular_velocity, shape=(num_samples,),
-                                          minval=-10.0,
-                                          maxval=10.0)
+                                          minval=-max_abs_velocity,
+                                          maxval=max_abs_velocity)
             return jnp.stack([cos, sin, angular_velocity], axis=-1)
 
         def _sample_actions(self,
@@ -82,6 +86,15 @@ def experiment(
                             num_samples: int):
             actions = jr.uniform(key, shape=(num_samples, 1), minval=-1, maxval=1)
             return actions
+
+    if num_offline_data > 0:
+        offline_data_gen = PendulumOfflineData(env=env, max_velocity=max_abs_velocity)
+        transitions = offline_data_gen.sample_transitions(key=offline_data_key,
+                                                          num_samples=num_offline_data)
+        offline_data = Data(inputs=jnp.concatenate([transitions.observation, transitions.action], axis=-1),
+                            outputs=transitions.next_observation - transitions.observation, )
+    else:
+        offline_data = None
 
     configs = dict(
         alg_name=alg_name,
@@ -109,20 +122,16 @@ def experiment(
         beta=beta,
     )
 
-    num_offline_data = num_offline_data
-
-    key = jr.PRNGKey(seed)
-
-    env = PendulumEnv()
-
     model = GPStatisticalModel(
-        kernel=ARD(input_dim=env.observation_size + env.action_size),
+        kernel=ARD(input_dim=env.observation_size + env.action_size, length_scale=0.1),
         input_dim=env.observation_size + env.action_size,
         output_dim=env.observation_size,
         output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
         logging_wandb=log_wandb,
         beta=jnp.ones(3) * beta,
-        num_training_steps=constant_schedule(1000)
+        num_training_steps=constant_schedule(num_training_steps),
+        lr_rate=1e-2,
+        weight_decay=1e-3,
     )
 
     @chex.dataclass
@@ -181,9 +190,9 @@ def experiment(
         lambda_constraint=lambda_constraint,
     )
 
-    cost_fn = VelocityBoundBinary(horizon=icem_horizon,
-                                  max_abs_velocity=max_abs_velocity,
-                                  violation_eps=violation_eps, )
+    cost_fn = VelocityBound(horizon=icem_horizon,
+                            max_abs_velocity=max_abs_velocity,
+                            violation_eps=violation_eps, )
 
     agent = alg(
         env=PendulumEnv(margin_factor=env_margin_factor, reward_source=reward_source),
@@ -212,31 +221,32 @@ def experiment(
                    )
 
     model_state = model.init(jr.PRNGKey(seed))
-    if num_offline_data > 0:
-        print('collecting offline data')
-        offline_data_gen = PendulumOfflineData(env=env, max_velocity=max_abs_velocity)
-        offline_data_key, key = jr.split(key)
-        offline_data = offline_data_gen.sample_transitions(key=offline_data_key,
-                                                           num_samples=num_offline_data)
-        offline_data = Data(inputs=jnp.concatenate([offline_data.observation, offline_data.action], axis=-1),
-                            outputs=offline_data.next_observation - offline_data.observation,
-                            )
-        print('model state before update: ', model_state)
-        updated_model_state = model.update(stats_model_state=model_state, data=offline_data)
-        new_ms = model_state.model_state.replace(
-            data_stats=updated_model_state.model_state.data_stats,
-            params=updated_model_state.model_state.params,
-        )
-        model_state = model_state.replace(
-            beta=updated_model_state.beta,
-            model_state=new_ms,
-        )
-        print('model state after update: ', model_state)
+    # if num_offline_data > 0:
+    #     print('collecting offline data')
+    #     offline_data_gen = PendulumOfflineData(env=env, max_velocity=max_abs_velocity)
+    #     offline_data_key, key = jr.split(key)
+    #     offline_data = offline_data_gen.sample_transitions(key=offline_data_key,
+    #                                                        num_samples=num_offline_data)
+    #     offline_data = Data(inputs=jnp.concatenate([offline_data.observation, offline_data.action], axis=-1),
+    #                         outputs=offline_data.next_observation - offline_data.observation,
+    #                         )
+    #     print('model state before update: ', model_state)
+    #     updated_model_state = model.update(stats_model_state=model_state, data=offline_data)
+    #     new_ms = model_state.model_state.replace(
+    #         data_stats=updated_model_state.model_state.data_stats,
+    #         params=updated_model_state.model_state.params,
+    #     )
+    #     model_state = model_state.replace(
+    #         beta=updated_model_state.beta,
+    #         model_state=new_ms,
+    #     )
+    #    print('model state after update: ', model_state)
 
     agent.run_episodes(num_episodes=10,
                        key=key,
                        model_state=model_state,
                        folder_name=f'{logs_dir}/{alg_name}/{exp_hash}/',
+                       data=offline_data,
                        )
     wandb.finish()
 

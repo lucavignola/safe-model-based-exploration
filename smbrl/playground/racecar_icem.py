@@ -51,7 +51,7 @@ class DummyReward(Reward):
         return Normal(0, 0.01), reward_params
 
 
-class CartPoleSystem(System):
+class RaceCarSystem(System):
     def __init__(self):
         super().__init__(dynamics=DummyDynamics(x_dim=5, u_dim=1),
                          reward=DummyReward(x_dim=5, u_dim=1))
@@ -117,7 +117,8 @@ class RadiusBound(AbstractCost):
                  actions: Float[Array, 'horizon action_dim'],
                  ) -> Scalar:
         dist_to_origin = jnp.linalg.norm(states[:, :2], axis=-1)
-        trajectory_constraint = jnp.maximum(dist_to_origin - self.max_radius, -self.violation_eps)
+
+        trajectory_constraint = jnp.maximum(dist_to_origin - (self.max_radius - self.violation_eps), 0.0)
         assert trajectory_constraint.shape == (self.horizon,)
         return jnp.mean(trajectory_constraint)
 
@@ -135,11 +136,11 @@ if __name__ == '__main__':
                               alpha=0.2,
                               num_steps=5,
                               num_particles=1, ),
-        system=ActionRepeatWrapper(action_repeat=action_repeat, system=CartPoleSystem()),
+        system=ActionRepeatWrapper(action_repeat=action_repeat, system=RaceCarSystem()),
         cost_fn=RadiusBound(horizon=horizon),
     )
 
-    system = ActionRepeatWrapper(action_repeat=action_repeat, system=CartPoleSystem())
+    system = ActionRepeatWrapper(action_repeat=action_repeat, system=RaceCarSystem())
 
     optimizer_state = optimizer.init(key=jr.PRNGKey(1))
     system_params = system.init_params(key=jr.PRNGKey(2))
