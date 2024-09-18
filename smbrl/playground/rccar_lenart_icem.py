@@ -153,9 +153,7 @@ if __name__ == '__main__':
                               num_steps=5,
                               num_particles=1, ),
         system=ActionRepeatWrapper(action_repeat=action_repeat, system=CartPoleSystem()),
-        cost_fn=PositionBound(horizon=horizon,
-                              max_position=0.5 - 1e-3,
-                              violation_eps=0.0, ),
+        cost_fn=None,
     )
 
     system = ActionRepeatWrapper(action_repeat=action_repeat, system=CartPoleSystem())
@@ -173,7 +171,7 @@ if __name__ == '__main__':
     for i in range(100 // action_repeat):
         start_time = time.time()
         action, optimizer_state = optimizer.act(obs, optimizer_state)
-        for _ in range(1):
+        for _ in range(action_repeat):
             sys_state = system.step(obs, action, system_params)
             obs, reward, system_params = sys_state.x_next, sys_state.reward, sys_state.system_params
         all_obs.append(obs)
@@ -204,6 +202,6 @@ if __name__ == '__main__':
     print(f'Minimal x position: {jnp.min(jnp.stack(all_obs)[:, 0])}')
 
     from smbrl.envs.rc_car_lenart import plot_rc_trajectory
+
     all_actions = jnp.stack(all_actions)
     plot_rc_trajectory(all_obs, all_actions, encode_angle=True)
-

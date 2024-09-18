@@ -41,7 +41,6 @@ def experiment(
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
 
-
     import jax.numpy as jnp
     import jax.random as jr
     import chex
@@ -55,9 +54,9 @@ def experiment(
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.pendulum import PendulumEnv
-    from smbrl.playground.pendulum_icem import VelocityBound
     from smbrl.playground.pendulum_icem import VelocityBoundBinary
     from bsm.statistical_model import GPStatisticalModel
+
     from smbrl.dynamics_models.gps import ARD
 
     from mbrl.utils.offline_data import OfflineData
@@ -158,7 +157,6 @@ def experiment(
         def init_params(self, key: chex.PRNGKey) -> PendulumRewardParams:
             default_reward_params = PendulumRewardParams()
             return default_reward_params.replace(target_angle=self.target_angle)
-
 
     if alg_name == 'SafeHUCRL':
         alg = SafeHUCRL

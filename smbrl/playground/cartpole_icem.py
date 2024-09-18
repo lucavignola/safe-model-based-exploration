@@ -113,7 +113,7 @@ class PositionBound(AbstractCost):
                  actions: Float[Array, 'horizon action_dim'],
                  ) -> Scalar:
         position = states[:, 0]
-        trajectory_constraint = jnp.maximum(jnp.abs(position) - self.max_position, -self.violation_eps)
+        trajectory_constraint = jnp.maximum(jnp.abs(position) - (self.max_position - self.violation_eps), 0.0)
         assert trajectory_constraint.shape == (self.horizon,)
         return jnp.mean(trajectory_constraint)
 
