@@ -1,37 +1,42 @@
 import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 
-PROJECT_NAME = 'CartPoleGP11Sept12_00_GPU'
+PROJECT_NAME = 'CartPoleGP18Sept10_30_GPU'
 ENTITY = 'trevenl'
 NUM_GPUS = 1
 
 _applicable_configs = {
     'project_name': [PROJECT_NAME],
     'num_training_steps': [2_000],
-    'episode_length': [100, ],
-    'action_repeat': [1, ],
+    'episode_length': [50, ],
+    'action_repeat': [2, ],
     'seed': list(range(5)),
     'entity': [ENTITY],
     'num_gpus': [NUM_GPUS],
+    'num_particles': [20],
+    'beta': [0.2, 2, 5, 10]
 }
 
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1]} \
                               | _applicable_configs
 
-_applicable_configs_actsafe_no_optimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [1]} \
-                                          | _applicable_configs
+all_flags_combinations = dict_permutations(_applicable_configs_actsafe)
 
-_applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0]} \
-                                           | _applicable_configs
 
-_applicable_configs_safehucrl = {'alg_name': ['SafeHUCRL'], 'use_optimism': [1], 'use_pessimism': [1]} \
-                                | _applicable_configs
+# _applicable_configs_actsafe_no_optimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [1]} \
+#                                           | _applicable_configs
 
-all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
-                         + dict_permutations(_applicable_configs_actsafe_no_optimism) \
-                         + dict_permutations(_applicable_configs_actsafe_no_pessimism) \
-                         + dict_permutations(_applicable_configs_safehucrl)
+# _applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0]} \
+#                                            | _applicable_configs
+#
+# _applicable_configs_safehucrl = {'alg_name': ['SafeHUCRL'], 'use_optimism': [1], 'use_pessimism': [1]} \
+#                                 | _applicable_configs
 
+# all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
+#                          + dict_permutations(_applicable_configs_actsafe_no_optimism) \
+#                          + dict_permutations(_applicable_configs_actsafe_no_pessimism) \
+#                          + dict_permutations(_applicable_configs_safehucrl)
+#
 
 def main():
     command_list = []

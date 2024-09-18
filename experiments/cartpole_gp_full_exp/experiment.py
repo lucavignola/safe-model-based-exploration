@@ -3,6 +3,7 @@ import os
 import sys
 import argparse
 from smbrl.utils.experiment_utils import Logger, hash_dict
+from bsm.utils import Data, Stats, DataStats
 
 
 def experiment(
@@ -27,7 +28,12 @@ def experiment(
         log_wandb: bool = True,
         logs_dir: str = 'runs',
         num_gpus: int = 0,
+        function_norm: float = 1.0,
+        num_elites: int = 50,
+        beta: float = 3.0,
+        use_precomputed_kernel_params: bool = False,
 ):
+    violation_eps = 0.1
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
@@ -45,7 +51,7 @@ def experiment(
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.cartpole_lenart import CartPoleEnv
     from smbrl.playground.cartpole_icem import PositionBound
-    from bsm.bayesian_regression.gaussian_processes import GaussianProcess
+    from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
     from jaxtyping import Float, Array, Scalar
 
@@ -65,8 +71,38 @@ def experiment(
         num_training_steps=num_training_steps,
         use_optimism=use_optimism,
         use_pessimism=use_pessimism,
-        num_gpus=num_gpus
+        num_gpus=num_gpus,
+        function_norm=function_norm,
+        num_elites=num_elites,
+        violation_eps=violation_eps,
+        beta=beta,
+        use_precomputed_kernel_params=use_precomputed_kernel_params
     )
+    if use_precomputed_kernel_params:
+        import jax
+        jax.config.update("jax_enable_x64", True)
+        precomputed_kernel_params = {
+            'pseudo_length_scale': jnp.array([[7.16197382, 6.65598727, 1.27592871, 5.13755356, 4.53211409,
+                                               9.09040351],
+                                              [8.19072527, 2.16344693, 1.40387256, 9.7920551, 2.02477876,
+                                               7.42569151],
+                                              [10.34339361, 1.85744069, 1.41517779, 9.59343932, 2.2050838,
+                                               7.67097848],
+                                              [13.89958062, 2.77055121, 0.257797, 11.71776589, 0.99092663,
+                                               10.44102166],
+                                              [11.03042704, 0.98221761, 0.17153512, 10.007944, 1.01396213,
+                                               10.06233002]], dtype=jnp.float64)}
+        precomputed_normalization_stats = DataStats(
+            inputs=Stats(mean=jnp.array([0.00055799, 0.0285231, -0.00933083, -0.09942926, 0.08258638, -0.00132751],
+                                        dtype=jnp.float64),
+                         std=jnp.array([0.28729099, 0.70630461, 0.70727364, 2.27893656, 4.6260925, 0.55621416],
+                                       dtype=jnp.float64)),
+            outputs=Stats(
+                mean=jnp.array([-0.00929227, 0.01625088, -0.01068899, 0.02509439, -0.01438436],
+                               dtype=jnp.float64),
+                std=jnp.array([0.22896878, 0.31788133, 0.32660905, 1.29298522, 1.11480673],
+                              dtype=jnp.float64)))
+        function_norms = jnp.array([14.77733678, 13.75797717, 13.80373648, 16.40662952, 17.46610356], dtype=jnp.float64)
 
     key = jr.PRNGKey(seed)
 
@@ -74,12 +110,22 @@ def experiment(
 
     env = CartPoleEnv()
 
-    model = GaussianProcess(
+    if use_precomputed_kernel_params:
+        num_training_steps = constant_schedule(0)
+    else:
+        num_training_steps = constant_schedule(1000)
+
+    model = GPStatisticalModel(
         kernel=ARD(input_dim=env.observation_size + env.action_size),
         input_dim=env.observation_size + env.action_size,
         output_dim=env.observation_size,
         output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
-        logging_wandb=log_wandb)
+        logging_wandb=log_wandb,
+        beta=jnp.ones(shape=(env.observation_size,)) * beta,
+        fixed_kernel_params=True,
+        normalization_stats=precomputed_normalization_stats,
+        num_training_steps=num_training_steps,
+    )
 
     @chex.dataclass
     class CartPoleRewardParams:
@@ -131,6 +177,19 @@ def experiment(
             default_reward_params = CartPoleRewardParams()
             return default_reward_params.replace(target_angle=self.target_angle)
 
+    if alg_name == 'SafeHUCRL':
+        alg = SafeHUCRL
+    elif alg_name == 'ActSafe':
+        alg = ActSafeAgent
+    elif alg_name == 'HUCRL':
+        alg = SafeHUCRL
+        lambda_constraint = 0.0
+    elif alg_name == 'OPAX':
+        alg = ActSafeAgent
+        lambda_constraint = 0.0
+    else:
+        raise NotImplementedError
+
     icem_params = iCemParams(
         num_particles=num_particles,
         num_samples=num_samples,
@@ -139,21 +198,17 @@ def experiment(
         exponent=exponent,
         lambda_constraint=lambda_constraint,
     )
-    if alg_name == 'SafeHUCRL':
-        alg = SafeHUCRL
-    elif alg_name == 'ActSafe':
-        alg = ActSafeAgent
-    else:
-        raise NotImplementedError
+
+    cost_fn = PositionBound(horizon=icem_horizon,
+                            max_position=max_position,
+                            violation_eps=violation_eps, )
 
     agent = alg(
         env=CartPoleEnv(),
         model=model,
         episode_length=episode_length,
         action_repeat=action_repeat,
-        cost_fn=PositionBound(horizon=icem_horizon,
-                              max_position=max_position,
-                              violation_eps=0.0, ),
+        cost_fn=cost_fn,
         test_tasks=[Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
                     Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
                     ],
@@ -167,9 +222,17 @@ def experiment(
     )
 
     model_state = model.init(jr.PRNGKey(seed))
+
+    # Here we set the model_state of the GP to the right one, we must ensure that we don't do
+    # any GP training afterward
+    if use_precomputed_kernel_params:
+        model_state.model_state.params = precomputed_kernel_params
+        model_state.model_state.data_stats = precomputed_normalization_stats
+
     if log_wandb:
         wandb.init(project=project_name,
                    config=configs,
+                   dir='/cluster/scratch/' + entity_name,
                    entity=entity_name,
                    )
     agent.run_episodes(num_episodes=20,
@@ -223,6 +286,10 @@ def main(args):
         logs_dir=args.logs_dir,
         num_gpus=args.num_gpus,
         exp_hash=exp_hash,
+        function_norm=args.function_norm,
+        num_elites=args.num_elites,
+        beta=args.beta,
+        use_precomputed_kernel_params=bool(args.use_precomputed_kernel_params)
     )
 
 
@@ -249,6 +316,10 @@ if __name__ == '__main__':
     parser.add_argument('--use_pessimism', type=int, default=1)
     parser.add_argument('--log_wandb', type=int, default=1)
     parser.add_argument('--num_gpus', type=int, default=0)
+    parser.add_argument('--function_norm', type=float, default=1.0)
+    parser.add_argument('--num_elites', type=int, default=100)
+    parser.add_argument('--beta', type=float, default=3.0)
+    parser.add_argument('--use_precomputed_kernel_params', type=int, default=1)
 
     parser.add_argument('--seed', type=int, default=0)
 
