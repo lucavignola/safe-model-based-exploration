@@ -116,7 +116,7 @@ class RadiusBound(AbstractCost):
                  states: Float[Array, 'horizon observation_dim'],
                  actions: Float[Array, 'horizon action_dim'],
                  ) -> Scalar:
-        dist_to_origin = jnp.linalg.norm(states[:, :2], axis=-1)
+        dist_to_origin = jnp.linalg.norm(states[:, :2], ord=jnp.inf, axis=-1)
 
         trajectory_constraint = jnp.maximum(dist_to_origin - (self.max_radius - self.violation_eps), 0.0)
         assert trajectory_constraint.shape == (self.horizon,)
@@ -125,7 +125,7 @@ class RadiusBound(AbstractCost):
 
 if __name__ == '__main__':
 
-    action_repeat = 1
+    action_repeat = 2
     horizon = 20
     optimizer = iCemTO(
         horizon=horizon,
