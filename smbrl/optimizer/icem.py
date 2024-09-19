@@ -384,15 +384,19 @@ if __name__ == "__main__":
     fig, axs = plt.subplots(len(exponent_list))
     fig.suptitle('Colored noise with varying correlation coefficients')
     for i, exponent in enumerate(exponent_list):
-        rng = jax.random.PRNGKey(seed=0)
-        size = 10000
-        samples = powerlaw_psd_gaussian(
-            exponent=exponent,
-            size=size,
-            rng=rng,
-        )
-        x = np.arange(0, size)
-        y = np.asarray(samples)
-        axs[i].plot(x, y, label="coefficient " + str(exponent))
+        for j in range(10):
+            rng = jax.random.PRNGKey(seed=j)
+            size = 50
+            samples = powerlaw_psd_gaussian(
+                exponent=exponent,
+                size=size,
+                rng=rng,
+            )
+            x = np.arange(0, size)
+            y = np.asarray(samples)
+            if j == 0:
+                axs[i].plot(x, y, label="coefficient " + str(exponent))
+            else:
+                axs[i].plot(x, y)
         axs[i].legend()
     plt.show()
