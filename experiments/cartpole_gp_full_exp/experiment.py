@@ -80,32 +80,31 @@ def experiment(
         use_precomputed_kernel_params=use_precomputed_kernel_params,
         use_function_norms=use_function_norms
     )
-    if use_precomputed_kernel_params:
-        import jax
-        jax.config.update("jax_enable_x64", True)
-        precomputed_kernel_params = {
-            'pseudo_length_scale': jnp.array([[7.16197382, 6.65598727, 1.27592871, 5.13755356, 4.53211409,
-                                               9.09040351],
-                                              [8.19072527, 2.16344693, 1.40387256, 9.7920551, 2.02477876,
-                                               7.42569151],
-                                              [10.34339361, 1.85744069, 1.41517779, 9.59343932, 2.2050838,
-                                               7.67097848],
-                                              [13.89958062, 2.77055121, 0.257797, 11.71776589, 0.99092663,
-                                               10.44102166],
-                                              [11.03042704, 0.98221761, 0.17153512, 10.007944, 1.01396213,
-                                               10.06233002]], dtype=jnp.float64)}
-        precomputed_normalization_stats = DataStats(
-            inputs=Stats(mean=jnp.array([0.00055799, 0.0285231, -0.00933083, -0.09942926, 0.08258638, -0.00132751],
-                                        dtype=jnp.float64),
-                         std=jnp.array([0.28729099, 0.70630461, 0.70727364, 2.27893656, 4.6260925, 0.55621416],
-                                       dtype=jnp.float64)),
-            outputs=Stats(
-                mean=jnp.array([-0.00929227, 0.01625088, -0.01068899, 0.02509439, -0.01438436],
-                               dtype=jnp.float64),
-                std=jnp.array([0.22896878, 0.31788133, 0.32660905, 1.29298522, 1.11480673],
-                              dtype=jnp.float64)))
-        precomputed_function_norms = jnp.array([14.77733678, 13.75797717, 13.80373648, 16.40662952, 17.46610356],
-                                               dtype=jnp.float64)
+    import jax
+    jax.config.update("jax_enable_x64", True)
+    precomputed_kernel_params = {
+        'pseudo_length_scale': jnp.array([[7.16197382, 6.65598727, 1.27592871, 5.13755356, 4.53211409,
+                                           9.09040351],
+                                          [8.19072527, 2.16344693, 1.40387256, 9.7920551, 2.02477876,
+                                           7.42569151],
+                                          [10.34339361, 1.85744069, 1.41517779, 9.59343932, 2.2050838,
+                                           7.67097848],
+                                          [13.89958062, 2.77055121, 0.257797, 11.71776589, 0.99092663,
+                                           10.44102166],
+                                          [11.03042704, 0.98221761, 0.17153512, 10.007944, 1.01396213,
+                                           10.06233002]], dtype=jnp.float64)}
+    precomputed_normalization_stats = DataStats(
+        inputs=Stats(mean=jnp.array([0.00055799, 0.0285231, -0.00933083, -0.09942926, 0.08258638, -0.00132751],
+                                    dtype=jnp.float64),
+                     std=jnp.array([0.28729099, 0.70630461, 0.70727364, 2.27893656, 4.6260925, 0.55621416],
+                                   dtype=jnp.float64)),
+        outputs=Stats(
+            mean=jnp.array([-0.00929227, 0.01625088, -0.01068899, 0.02509439, -0.01438436],
+                           dtype=jnp.float64),
+            std=jnp.array([0.22896878, 0.31788133, 0.32660905, 1.29298522, 1.11480673],
+                          dtype=jnp.float64)))
+    precomputed_function_norms = jnp.array([14.77733678, 13.75797717, 13.80373648, 16.40662952, 17.46610356],
+                                           dtype=jnp.float64)
 
     key = jr.PRNGKey(seed)
 
@@ -246,6 +245,10 @@ def experiment(
         model_state.model_state.params = precomputed_kernel_params
         model_state.model_state.data_stats = precomputed_normalization_stats
 
+    # Here we need to take care of the first datapoint!!
+    model_state.model_state.history = Data(inputs=jnp.array([[0., 1.0, 0., 0., 0., 0.]]),
+                                           outputs=jnp.array([[0., 0., 0., 0., 0.]]))
+
     if log_wandb:
         wandb.init(project=project_name,
                    config=configs,
@@ -322,7 +325,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)
     parser.add_argument('--alpha', type=float, default=0.2)
-    parser.add_argument('--num_steps', type=int, default=10)
+    parser.add_argument('--num_steps', type=int, default=5)
     parser.add_argument('--exponent', type=float, default=1.0)
     parser.add_argument('--lambda_constraint', type=float, default=1e9)
     parser.add_argument('--icem_horizon', type=int, default=50)
