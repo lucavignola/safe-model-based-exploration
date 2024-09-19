@@ -1,7 +1,7 @@
 """Generate colored noise. Taken from: https://github.com/felixpatzelt/colorednoise/blob/master/colorednoise.py"""
 from abc import abstractmethod
 from functools import partial
-from typing import NamedTuple, Generic
+from typing import NamedTuple, Generic, Tuple
 
 import chex
 import jax
@@ -371,7 +371,8 @@ class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
         return new_opt_state
 
     @partial(jax.jit, static_argnums=0)
-    def act(self, obs: chex.Array, opt_state: iCemOptimizerState, evaluate: bool = True):
+    def act(self, obs: chex.Array, opt_state: iCemOptimizerState, evaluate: bool = True) -> Tuple[
+        Float[Array, 'action_dim'], iCemOptimizerState]:
         new_opt_state = self.optimize(initial_state=obs, opt_state=opt_state)
         return new_opt_state.action, new_opt_state
 
