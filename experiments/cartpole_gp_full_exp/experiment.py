@@ -1,9 +1,10 @@
-import numpy as np
-import os
-import sys
 import argparse
+import sys
+
+import numpy as np
+from bsm.utils import Data
+
 from smbrl.utils.experiment_utils import Logger, hash_dict
-from bsm.utils import Data, Stats, DataStats
 
 
 def experiment(
@@ -33,6 +34,7 @@ def experiment(
         beta: float = 3.0,
         use_precomputed_kernel_params: bool = False,
         use_function_norms: bool = False,
+        num_offline_data: int = 0,
 ):
     violation_eps = 0.1
     if num_gpus == 0:
@@ -43,7 +45,7 @@ def experiment(
     import jax.random as jr
     import chex
     import wandb
-    from smbrl.agent.actsafe import ActSafeAgent, SafeHUCRL, Task
+    from smbrl.agent.actsafe import ActSafeAgent, SafeHUCRL
     from flax import struct
     from distrax import Distribution, Normal
     from typing import Tuple
@@ -55,6 +57,11 @@ def experiment(
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
     from jaxtyping import Float, Array, Scalar
+    import pickle
+    from jax import vmap
+    from brax.envs.base import State
+    import os
+    from bsm.utils import Data, Stats, DataStats
 
     configs = dict(
         alg_name=alg_name,
@@ -78,10 +85,23 @@ def experiment(
         violation_eps=violation_eps,
         beta=beta,
         use_precomputed_kernel_params=use_precomputed_kernel_params,
-        use_function_norms=use_function_norms
+        use_function_norms=use_function_norms,
+        num_offline_data=num_offline_data
     )
     import jax
     jax.config.update("jax_enable_x64", True)
+
+    # folder_name = 'cartpole_pole_weight_1'
+    # folder_name = os.path.join('../../smbrl/utils/', folder_name)
+    #
+    # with open(os.path.join(folder_name, 'kernel_params.pickle'), 'rb') as handle:
+    #     precomputed_kernel_params = pickle.load(handle)
+    #
+    # with open(os.path.join(folder_name, 'data_stats.pickle'), 'rb') as handle:
+    #     precomputed_normalization_stats = pickle.load(handle)
+    #
+    # with open(os.path.join(folder_name, 'norms.pickle'), 'rb') as handle:
+    #     precomputed_function_norms = pickle.load(handle)
     precomputed_kernel_params = {
         'pseudo_length_scale': jnp.array([[7.16197382, 6.65598727, 1.27592871, 5.13755356, 4.53211409,
                                            9.09040351],
@@ -105,10 +125,33 @@ def experiment(
                           dtype=jnp.float64)))
     precomputed_function_norms = jnp.array([14.77733678, 13.75797717, 13.80373648, 16.40662952, 17.46610356],
                                            dtype=jnp.float64)
+    def sample_first_step(num_samples: int,
+                          key: Float[Array, '2'],
+                          action_repeat: int) -> Data:
+        key_state, key_actions = jr.split(key)
+        env = CartPoleEnv()
+        state = env.reset(rng=key_state)
+        actions = jr.uniform(key=key_actions, shape=(num_samples, env.action_size), minval=-1.0, maxval=1.0)
+        obs = jnp.repeat(state.obs[None, :], num_samples, axis=0)
+        inputs = jnp.concatenate([obs, actions], axis=-1)
+
+        def dynamics_fn(x):
+            obs, action = x[:env.observation_size], x[env.observation_size:]
+            state = State(pipeline_state=None,
+                          obs=obs,
+                          reward=jnp.array(0.0),
+                          done=jnp.array(0.0), )
+            for _ in range(action_repeat):
+                state = env.step(state, action)
+            return state.obs - obs
+
+        outputs = vmap(dynamics_fn)(inputs)
+        return Data(inputs=inputs, outputs=outputs)
 
     key = jr.PRNGKey(seed)
+    key, key_offline_data = jr.split(key)
 
-    offline_data = None
+    offline_data = sample_first_step(num_offline_data, key_offline_data, action_repeat)
 
     env = CartPoleEnv()
 
@@ -225,9 +268,10 @@ def experiment(
         episode_length=episode_length,
         action_repeat=action_repeat,
         cost_fn=cost_fn,
-        test_tasks=[Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
-                    Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
-                    ],
+        test_tasks=[],
+        # test_tasks=[Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
+        #             Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
+        #             ],
         predict_difference=True,
         num_training_steps=constant_schedule(num_training_steps),
         icem_horizon=icem_horizon,
@@ -268,6 +312,7 @@ def experiment(
 def main(args):
     """"""
     from pprint import pprint
+    import os
     print(args)
     """ generate experiment hash and set up redirect of output streams """
     exp_hash = hash_dict(args.__dict__)
@@ -311,6 +356,7 @@ def main(args):
         beta=args.beta,
         use_precomputed_kernel_params=bool(args.use_precomputed_kernel_params),
         use_function_norms=bool(args.use_function_norms),
+        num_offline_data=args.num_offline_data,
     )
 
 
@@ -331,7 +377,7 @@ if __name__ == '__main__':
     parser.add_argument('--icem_horizon', type=int, default=50)
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
-    parser.add_argument('--max_position', type=float, default=0.5)
+    parser.add_argument('--max_position', type=float, default=1.0)
     parser.add_argument('--num_training_steps', type=int, default=1_000)
     parser.add_argument('--use_optimism', type=int, default=1)
     parser.add_argument('--use_pessimism', type=int, default=1)
@@ -342,8 +388,9 @@ if __name__ == '__main__':
     parser.add_argument('--beta', type=float, default=1.0)
     parser.add_argument('--use_precomputed_kernel_params', type=int, default=0)
     parser.add_argument('--use_function_norms', type=int, default=0)
+    parser.add_argument('--num_offline_data', type=int, default=10)
 
-    parser.add_argument('--seed', type=int, default=1)
+    parser.add_argument('--seed', type=int, default=0)
 
     parser.add_argument('--exp_result_folder', type=str, default=None)
 
