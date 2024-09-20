@@ -36,6 +36,7 @@ def experiment(
         use_function_norms: bool = False,
         num_offline_data: int = 0,
         violation_eps: float = 0.1,
+        optimizer: str = 'icem',
 ):
     if num_gpus == 0:
         import os
@@ -87,6 +88,7 @@ def experiment(
         use_precomputed_kernel_params=use_precomputed_kernel_params,
         use_function_norms=use_function_norms,
         num_offline_data=num_offline_data,
+        optimizer=optimizer
     )
     import jax
     jax.config.update("jax_enable_x64", True)
@@ -283,6 +285,7 @@ def experiment(
         log_to_wandb=log_wandb,
         use_pessimism=use_pessimism,
         use_optimism=use_optimism,
+        optimizer=optimizer,
     )
 
     model_state = model.init(jr.PRNGKey(seed))
@@ -361,7 +364,8 @@ def main(args):
         use_precomputed_kernel_params=bool(args.use_precomputed_kernel_params),
         use_function_norms=bool(args.use_function_norms),
         num_offline_data=args.num_offline_data,
-        violation_eps=args.violation_eps
+        violation_eps=args.violation_eps,
+        optimizer=args.optimizer,
     )
 
 
@@ -394,7 +398,8 @@ if __name__ == '__main__':
     parser.add_argument('--use_precomputed_kernel_params', type=int, default=0)
     parser.add_argument('--use_function_norms', type=int, default=0)
     parser.add_argument('--num_offline_data', type=int, default=50)
-    parser.add_argument('--violation_eps', type=float, default=0.1)
+    parser.add_argument('--violation_eps', type=float, default=0.3)
+    parser.add_argument('--optimizer', type=str, default='ipopt')
 
     parser.add_argument('--seed', type=int, default=0)
 

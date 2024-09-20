@@ -23,6 +23,7 @@ from optax import Schedule, constant_schedule
 
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
 from smbrl.optimizer.icem import iCemParams, iCemTO, AbstractCost
+from smbrl.optimizer.ipopt_optimizer import IPOPTOptimizer, IPOPTParams
 from smbrl.utils.utils import create_folder, ExplorationTrajectory
 
 
@@ -44,11 +45,13 @@ class SafeModelBasedAgent:
                  num_training_steps: Schedule = constant_schedule(1000),
                  icem_horizon: int = 20,
                  icem_params: iCemParams = iCemParams(),
+                 ipopt_params: IPOPTParams = IPOPTParams(),
                  saving_frequency: int = 5,
                  log_to_wandb: bool = False,
                  train_task_index: int = -1,
                  use_optimism: bool = True,
                  use_pessimism: bool = True,
+                 optimizer: str = 'icem' # can be 'icem' or 'ipopt'
                  ):
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
@@ -76,6 +79,8 @@ class SafeModelBasedAgent:
         self.icem_params = icem_params
         self.saving_frequency = saving_frequency
         self.log_to_wandb = log_to_wandb
+        self.optimizer = optimizer
+        self.ipopt_params = ipopt_params
 
     def train_dynamics_model(self,
                              model_state: ModelState,
@@ -175,16 +180,29 @@ class SafeModelBasedAgent:
         )
         key, subkey = jr.split(key)
 
-        optimizer = iCemTO(
-            horizon=self.icem_horizon,
-            action_dim=self.env.action_size,
-            key=subkey,
-            opt_params=self.icem_params,
-            system=learned_system,
-            cost_fn=self.cost_fn,
-            use_optimism=self.use_optimism,
-            use_pessimism=self.use_pessimism,
-        )
+
+        if self.optimizer == 'icem':
+            optimizer = iCemTO(
+                horizon=self.icem_horizon,
+                action_dim=self.env.action_size,
+                key=subkey,
+                opt_params=self.icem_params,
+                system=learned_system,
+                cost_fn=self.cost_fn,
+                use_optimism=self.use_optimism,
+                use_pessimism=self.use_pessimism,
+            )
+        elif self.optimizer == 'ipopt':
+            optimizer = IPOPTOptimizer(
+                horizon=self.icem_horizon,
+                action_dim=self.env.action_size,
+                key=subkey,
+                opt_params=self.ipopt_params,
+                system=learned_system,
+                cost_fn=self.cost_fn,
+                use_optimism=self.use_optimism,
+                use_pessimism=self.use_pessimism,
+            )
 
         key, subkey = jr.split(key)
         optimizer_state = optimizer.init(key=subkey)
@@ -202,6 +220,7 @@ class SafeModelBasedAgent:
         # TODO: Should implement treatment of done flags
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
+            print(f'Step {i}: reward is {optimizer_state.best_reward}')
             for _ in range(self.action_repeat):
                 env_state = self.env.step(env_state, action)
                 extrinsic_rewards.append(env_state.reward)
@@ -257,11 +276,11 @@ class SafeModelBasedAgent:
             model_state=model_state,
             key=key)
 
-        # import matplotlib.pyplot as plt
-        # plt.plot(exploration_states.obs[:, 0])
-        # plt.axhline(y=-0.5, color='r', linestyle='-')
-        # plt.axhline(y=0.5, color='r', linestyle='-')
-        # plt.show()
+        import matplotlib.pyplot as plt
+        plt.plot(exploration_states.obs[:, 0])
+        plt.axhline(y=-0.5, color='r', linestyle='-')
+        plt.axhline(y=0.5, color='r', linestyle='-')
+        plt.show()
 
         if self.log_to_wandb:
             wandb.log({
