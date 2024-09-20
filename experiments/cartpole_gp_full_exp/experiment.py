@@ -35,8 +35,8 @@ def experiment(
         use_precomputed_kernel_params: bool = False,
         use_function_norms: bool = False,
         num_offline_data: int = 0,
+        violation_eps: float = 0.1,
 ):
-    violation_eps = 0.1
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
@@ -86,7 +86,7 @@ def experiment(
         beta=beta,
         use_precomputed_kernel_params=use_precomputed_kernel_params,
         use_function_norms=use_function_norms,
-        num_offline_data=num_offline_data
+        num_offline_data=num_offline_data,
     )
     import jax
     jax.config.update("jax_enable_x64", True)
@@ -125,14 +125,18 @@ def experiment(
                           dtype=jnp.float64)))
     precomputed_function_norms = jnp.array([14.77733678, 13.75797717, 13.80373648, 16.40662952, 17.46610356],
                                            dtype=jnp.float64)
+
     def sample_first_step(num_samples: int,
                           key: Float[Array, '2'],
                           action_repeat: int) -> Data:
-        key_state, key_actions = jr.split(key)
+        key_state, key_actions, key_lin_position = jr.split(key, 3)
         env = CartPoleEnv()
         state = env.reset(rng=key_state)
         actions = jr.uniform(key=key_actions, shape=(num_samples, env.action_size), minval=-1.0, maxval=1.0)
         obs = jnp.repeat(state.obs[None, :], num_samples, axis=0)
+        lin_position = jr.uniform(key=key_actions, shape=(num_samples,),
+                                  minval=-max_position, maxval=max_position)
+        obs = obs.at[:, 0].set(lin_position)
         inputs = jnp.concatenate([obs, actions], axis=-1)
 
         def dynamics_fn(x):
@@ -357,6 +361,7 @@ def main(args):
         use_precomputed_kernel_params=bool(args.use_precomputed_kernel_params),
         use_function_norms=bool(args.use_function_norms),
         num_offline_data=args.num_offline_data,
+        violation_eps=args.violation_eps
     )
 
 
@@ -373,11 +378,11 @@ if __name__ == '__main__':
     parser.add_argument('--alpha', type=float, default=0.2)
     parser.add_argument('--num_steps', type=int, default=5)
     parser.add_argument('--exponent', type=float, default=1.0)
-    parser.add_argument('--lambda_constraint', type=float, default=1e9)
+    parser.add_argument('--lambda_constraint', type=float, default=1e6)
     parser.add_argument('--icem_horizon', type=int, default=50)
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
-    parser.add_argument('--max_position', type=float, default=1.0)
+    parser.add_argument('--max_position', type=float, default=1.5)
     parser.add_argument('--num_training_steps', type=int, default=1_000)
     parser.add_argument('--use_optimism', type=int, default=1)
     parser.add_argument('--use_pessimism', type=int, default=1)
@@ -388,7 +393,8 @@ if __name__ == '__main__':
     parser.add_argument('--beta', type=float, default=1.0)
     parser.add_argument('--use_precomputed_kernel_params', type=int, default=0)
     parser.add_argument('--use_function_norms', type=int, default=0)
-    parser.add_argument('--num_offline_data', type=int, default=10)
+    parser.add_argument('--num_offline_data', type=int, default=50)
+    parser.add_argument('--violation_eps', type=float, default=0.1)
 
     parser.add_argument('--seed', type=int, default=0)
 
