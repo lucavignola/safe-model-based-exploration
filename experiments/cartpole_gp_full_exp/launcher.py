@@ -1,7 +1,7 @@
 import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 
-PROJECT_NAME = 'CartPoleGP19Sept14_00_GPU'
+PROJECT_NAME = 'CartPoleGP19Sept14_30_GPU'
 ENTITY = 'trevenl'
 NUM_GPUS = 1
 
@@ -18,15 +18,16 @@ _applicable_configs = {
     'use_precomputed_kernel_params': [0, ],
     'use_function_norms': [0],
 
-    'num_offline_data': [5, 10, 20, ],
+    'num_offline_data': [20, ],
 
     'max_position': [1.0],
 
     'num_samples': [1000],
     'num_particles': [20, ],
     'icem_horizon': [50, ],
-    'num_elites': [50],
-    'num_steps': [10]
+    'num_elites': [100],
+    'num_steps': [10],
+    'violation_eps': [0.3],
 }
 
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1]} \
