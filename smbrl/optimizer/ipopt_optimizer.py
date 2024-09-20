@@ -31,7 +31,7 @@ class IPOPTParams(NamedTuple):
     u_max: float | chex.Array = 1.0
     warm_start: bool = True
     lambda_constraint: float = 1e7
-    hard_constraint: bool = True
+    hard_constraint: bool = False
 
 
 @chex.dataclass

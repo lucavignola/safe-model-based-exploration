@@ -133,7 +133,9 @@ def experiment(
 
     offline_data = offline_data_sampler.sample(key=key_offline_data,
                                                num_samples=num_offline_data,
-                                               max_abs_lin_position=0.3
+                                               max_abs_lin_position=1.0,
+                                               max_abs_ang_velocity=5.0,
+                                               max_abs_lin_velocity=5.0,
                                                )
 
     env = CartPoleEnv()
@@ -360,7 +362,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', type=int, default=5)
     parser.add_argument('--exponent', type=float, default=1.0)
     parser.add_argument('--lambda_constraint', type=float, default=1e6)
-    parser.add_argument('--icem_horizon', type=int, default=20)
+    parser.add_argument('--icem_horizon', type=int, default=50)
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
     parser.add_argument('--max_position', type=float, default=1.5)
@@ -371,12 +373,12 @@ if __name__ == '__main__':
     parser.add_argument('--num_gpus', type=int, default=0)
     parser.add_argument('--function_norm', type=float, default=1.0)
     parser.add_argument('--num_elites', type=int, default=50)
-    parser.add_argument('--beta', type=float, default=1.0)
+    parser.add_argument('--beta', type=float, default=2.0)
     parser.add_argument('--use_precomputed_kernel_params', type=int, default=0)
     parser.add_argument('--use_function_norms', type=int, default=0)
     parser.add_argument('--num_offline_data', type=int, default=50)
-    parser.add_argument('--violation_eps', type=float, default=0.3)
-    parser.add_argument('--optimizer', type=str, default='ipopt')
+    parser.add_argument('--violation_eps', type=float, default=0.1)
+    parser.add_argument('--optimizer', type=str, default='icem')
 
     parser.add_argument('--seed', type=int, default=0)
 

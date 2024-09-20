@@ -23,7 +23,7 @@ from optax import Schedule, constant_schedule
 
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
 from smbrl.optimizer.icem import iCemParams, iCemTO, AbstractCost
-from smbrl.optimizer.ipopt_optimizer import IPOPTOptimizer, IPOPTParams
+# from smbrl.optimizer.ipopt_optimizer import IPOPTOptimizer, IPOPTParams
 from smbrl.utils.utils import create_folder, ExplorationTrajectory
 
 
@@ -51,7 +51,7 @@ class SafeModelBasedAgent:
                  train_task_index: int = -1,
                  use_optimism: bool = True,
                  use_pessimism: bool = True,
-                 optimizer: str = 'icem' # can be 'icem' or 'ipopt'
+                 optimizer: str = 'icem'  # can be 'icem' or 'ipopt'
                  ):
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
@@ -116,17 +116,17 @@ class SafeModelBasedAgent:
                 use_optimism=self.use_optimism,
                 use_pessimism=self.use_pessimism,
             )
-        elif self.optimizer == 'ipopt':
-            optimizer = IPOPTOptimizer(
-                horizon=self.icem_horizon,
-                action_dim=self.env.action_size,
-                key=subkey,
-                opt_params=self.ipopt_params,
-                system=learned_system,
-                cost_fn=self.cost_fn,
-                use_optimism=self.use_optimism,
-                use_pessimism=self.use_pessimism,
-            )
+        # elif self.optimizer == 'ipopt':
+        #     optimizer = IPOPTOptimizer(
+        #         horizon=self.icem_horizon,
+        #         action_dim=self.env.action_size,
+        #         key=subkey,
+        #         opt_params=self.ipopt_params,
+        #         system=learned_system,
+        #         cost_fn=self.cost_fn,
+        #         use_optimism=self.use_optimism,
+        #         use_pessimism=self.use_pessimism,
+        #     )
 
         key, subkey = jr.split(key)
         optimizer_state = optimizer.init(key=subkey)
@@ -192,7 +192,6 @@ class SafeModelBasedAgent:
         )
         key, subkey = jr.split(key)
 
-
         if self.optimizer == 'icem':
             optimizer = iCemTO(
                 horizon=self.icem_horizon,
@@ -204,17 +203,17 @@ class SafeModelBasedAgent:
                 use_optimism=self.use_optimism,
                 use_pessimism=self.use_pessimism,
             )
-        elif self.optimizer == 'ipopt':
-            optimizer = IPOPTOptimizer(
-                horizon=self.icem_horizon,
-                action_dim=self.env.action_size,
-                key=subkey,
-                opt_params=self.ipopt_params,
-                system=learned_system,
-                cost_fn=self.cost_fn,
-                use_optimism=self.use_optimism,
-                use_pessimism=self.use_pessimism,
-            )
+        # elif self.optimizer == 'ipopt':
+        #     optimizer = IPOPTOptimizer(
+        #         horizon=self.icem_horizon,
+        #         action_dim=self.env.action_size,
+        #         key=subkey,
+        #         opt_params=self.ipopt_params,
+        #         system=learned_system,
+        #         cost_fn=self.cost_fn,
+        #         use_optimism=self.use_optimism,
+        #         use_pessimism=self.use_pessimism,
+        #     )
 
         key, subkey = jr.split(key)
         optimizer_state = optimizer.init(key=subkey)
@@ -288,11 +287,11 @@ class SafeModelBasedAgent:
             model_state=model_state,
             key=key)
 
-        import matplotlib.pyplot as plt
-        plt.plot(exploration_states.obs[:, 0])
-        plt.axhline(y=-0.5, color='r', linestyle='-')
-        plt.axhline(y=0.5, color='r', linestyle='-')
-        plt.show()
+        # import matplotlib.pyplot as plt
+        # plt.plot(exploration_states.obs)
+        # plt.axhline(y=-1.5, color='r', linestyle='-')
+        # plt.axhline(y=1.5, color='r', linestyle='-')
+        # plt.show()
 
         if self.log_to_wandb:
             wandb.log({
