@@ -5,7 +5,9 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 from brax.envs.base import State, Env
+from bsm.utils import Data
 from flax import struct
+from jax import vmap
 from jaxtyping import Float, Array, Scalar
 
 
@@ -157,6 +159,50 @@ class CartPoleEnv(Env):
 
     def backend(self) -> str:
         return 'positional'
+
+
+class CartPoleOfflineData:
+    def __init__(self,
+                 action_repeat: int,
+                 predict_difference: bool = True):
+        self.env = CartPoleEnv()
+        self.action_repeat = action_repeat
+        self.predict_difference = predict_difference
+
+    def dynamics_fn(self,
+                    z: Float[Array, '6']):
+        obs, action = z[:self.env.observation_size], z[self.env.observation_size:]
+        state = State(pipeline_state=None,
+                      obs=obs,
+                      reward=jnp.array(0.0),
+                      done=jnp.array(0.0), )
+        for _ in range(self.action_repeat):
+            state = self.env.step(state, action)
+        return state.obs - obs
+
+    def sample(self,
+               key: Float[Array, '2'],
+               num_samples: int = 1,
+               max_abs_lin_position: float = 0.5,
+               max_abs_angle: float = jnp.pi,
+               max_abs_lin_velocity: float = 1.0,
+               max_abs_ang_velocity: float = 4.0,
+               max_abs_action: float = 1.0,
+               ):
+        key_lin_pos, key_ang, key_lin_vel, key_ang_vel, key_action = jr.split(key, 5)
+        lin_pos = jr.uniform(key_lin_pos, minval=-max_abs_lin_position, maxval=max_abs_lin_position,
+                             shape=(num_samples,))
+        ang = jr.uniform(key_ang, minval=-max_abs_angle, maxval=max_abs_angle, shape=(num_samples,))
+        lin_velocity = jr.uniform(key_lin_vel, minval=-max_abs_lin_velocity, maxval=max_abs_lin_velocity,
+                                  shape=(num_samples,))
+        ang_velocity = jr.uniform(key_ang_vel, minval=-max_abs_ang_velocity, maxval=max_abs_ang_velocity,
+                                  shape=(num_samples,))
+        actions = jr.uniform(key_action, minval=-max_abs_action, maxval=max_abs_action, shape=(num_samples,))
+
+        inputs = jnp.stack([lin_pos, jnp.cos(ang), jnp.sin(ang), lin_velocity, ang_velocity, actions], axis=-1)
+        outputs = vmap(self.dynamics_fn)(inputs)
+
+        return Data(inputs=inputs, outputs=outputs)
 
 
 if __name__ == '__main__':

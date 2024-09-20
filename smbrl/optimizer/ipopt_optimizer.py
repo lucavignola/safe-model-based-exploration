@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 from cyipopt import minimize_ipopt
-from jax import jit, vmap, grad
+from jax import jit, vmap, grad, jacfwd
 from jax.nn import relu
 from jaxtyping import Float, Array, Key, Scalar
 from mbpo.optimizers.base_optimizer import BaseOptimizer
@@ -31,6 +31,7 @@ class IPOPTParams(NamedTuple):
     u_max: float | chex.Array = 1.0
     warm_start: bool = True
     lambda_constraint: float = 1e7
+    hard_constraint: bool = True
 
 
 @chex.dataclass
@@ -73,6 +74,7 @@ class IPOPTOptimizer(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
             self.summarize_cost_samples = jnp.mean
 
         self.obj_grad = jit(grad(self.objective, argnums=0))
+        self.con_ineq_jac = jit(jacfwd(self.constraint))
 
     def init(self, key: chex.Array) -> IPOPTOptimizerState:
         assert self.system is not None, "iCem optimizer requires system to be defined."
@@ -125,6 +127,33 @@ class IPOPTOptimizer(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
             cost = self.summarize_cost_samples(cost)
         return - (reward - self.opt_params.lambda_constraint * relu(cost))
 
+    @partial(jit, static_argnums=0)
+    def constraint(self,
+                   seq: Float[Array, 'horizon action_dim'],
+                   key: Key[Array, '2'],
+                   initial_state: Float[Array, 'observation_dim'],
+                   opt_state: IPOPTOptimizerState) -> Scalar:
+        seq = seq.reshape(self.horizon, self.system.u_dim)
+
+        def optimize_fn(init_state: Float[Array, 'observation_dim'], rng: Key[Array, '2']):
+            system_params = opt_state.system_params.replace(key=rng)
+            return rollout_actions(system=self.system,
+                                   system_params=system_params,
+                                   init_state=init_state,
+                                   horizon=self.horizon,
+                                   actions=seq,
+                                   )
+
+        particles_rng = jr.split(key, self.opt_params.num_particles)
+        transitions = jax.vmap(optimize_fn, in_axes=(None, 0))(initial_state, particles_rng)
+        cost = 0
+        if self.cost_fn is not None:
+            cost = vmap(self.cost_fn)(transitions.observation, transitions.action)
+            assert cost.shape == (self.opt_params.num_particles,)
+            # We summarize cost with mean or max (if pessimism is true)
+            cost = self.summarize_cost_samples(cost)
+        return -relu(cost)
+
     def optimize(
             self,
             initial_state: Float[Array, 'observation_dim'],
@@ -140,8 +169,21 @@ class IPOPTOptimizer(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
         new_opt_state = opt_state.replace(key=key)
 
         bnds = [(-1, 1) for _ in range(self.horizon * self.system.u_dim)]
-        out = minimize_ipopt(self.objective, jac=self.obj_grad, x0=x, options={'disp': 0, 'maxiter': 100},
-                             args=(key, initial_state, opt_state), bounds=bnds)
+        if self.opt_params.hard_constraint:
+            def wrapped_constraint(seq: Float[Array, 'horizon action_dim']):
+                return self.constraint(seq, key, initial_state, opt_state)
+
+            def wrapped_constraint_jac(seq: Float[Array, 'horizon action_dim']):
+                return self.con_ineq_jac(seq, key, initial_state, opt_state)
+
+            cons = [
+                {'type': 'ineq', 'fun': wrapped_constraint, 'jac': wrapped_constraint_jac}
+            ]
+            out = minimize_ipopt(self.objective, jac=self.obj_grad, x0=x, options={'disp': 0, 'maxiter': 100},
+                                 args=(key, initial_state, opt_state), bounds=bnds, constraints=cons)
+        else:
+            out = minimize_ipopt(self.objective, jac=self.obj_grad, x0=x, options={'disp': 0, 'maxiter': 100},
+                                 args=(key, initial_state, opt_state), bounds=bnds)
         new_actions = jnp.array(out.x)
         new_actions = self.unpack_optimization_vector(new_actions)
         new_reward = jnp.array(out.fun).item()

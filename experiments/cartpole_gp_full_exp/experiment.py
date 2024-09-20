@@ -2,7 +2,6 @@ import argparse
 import sys
 
 import numpy as np
-from bsm.utils import Data
 
 from smbrl.utils.experiment_utils import Logger, hash_dict
 
@@ -53,15 +52,13 @@ def experiment(
     from optax import constant_schedule
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
-    from smbrl.envs.cartpole_lenart import CartPoleEnv
+    from smbrl.envs.cartpole_lenart import CartPoleEnv, CartPoleOfflineData
     from smbrl.playground.cartpole_icem import PositionBound
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
     from jaxtyping import Float, Array, Scalar
-    import pickle
     from jax import vmap
     from brax.envs.base import State
-    import os
     from bsm.utils import Data, Stats, DataStats
 
     configs = dict(
@@ -128,36 +125,16 @@ def experiment(
     precomputed_function_norms = jnp.array([14.77733678, 13.75797717, 13.80373648, 16.40662952, 17.46610356],
                                            dtype=jnp.float64)
 
-    def sample_first_step(num_samples: int,
-                          key: Float[Array, '2'],
-                          action_repeat: int) -> Data:
-        key_state, key_actions, key_lin_position = jr.split(key, 3)
-        env = CartPoleEnv()
-        state = env.reset(rng=key_state)
-        actions = jr.uniform(key=key_actions, shape=(num_samples, env.action_size), minval=-1.0, maxval=1.0)
-        obs = jnp.repeat(state.obs[None, :], num_samples, axis=0)
-        lin_position = jr.uniform(key=key_actions, shape=(num_samples,),
-                                  minval=-max_position, maxval=max_position)
-        obs = obs.at[:, 0].set(lin_position)
-        inputs = jnp.concatenate([obs, actions], axis=-1)
-
-        def dynamics_fn(x):
-            obs, action = x[:env.observation_size], x[env.observation_size:]
-            state = State(pipeline_state=None,
-                          obs=obs,
-                          reward=jnp.array(0.0),
-                          done=jnp.array(0.0), )
-            for _ in range(action_repeat):
-                state = env.step(state, action)
-            return state.obs - obs
-
-        outputs = vmap(dynamics_fn)(inputs)
-        return Data(inputs=inputs, outputs=outputs)
-
     key = jr.PRNGKey(seed)
     key, key_offline_data = jr.split(key)
 
-    offline_data = sample_first_step(num_offline_data, key_offline_data, action_repeat)
+    offline_data_sampler = CartPoleOfflineData(action_repeat=action_repeat,
+                                               predict_difference=True)
+
+    offline_data = offline_data_sampler.sample(key=key_offline_data,
+                                               num_samples=num_offline_data,
+                                               max_abs_lin_position=0.3
+                                               )
 
     env = CartPoleEnv()
 
@@ -383,7 +360,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', type=int, default=5)
     parser.add_argument('--exponent', type=float, default=1.0)
     parser.add_argument('--lambda_constraint', type=float, default=1e6)
-    parser.add_argument('--icem_horizon', type=int, default=50)
+    parser.add_argument('--icem_horizon', type=int, default=20)
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
     parser.add_argument('--max_position', type=float, default=1.5)
