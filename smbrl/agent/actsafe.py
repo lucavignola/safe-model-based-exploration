@@ -105,16 +105,28 @@ class SafeModelBasedAgent:
         )
         key, subkey = jr.split(key)
 
-        optimizer = iCemTO(
-            horizon=self.icem_horizon,
-            action_dim=self.env.action_size,
-            key=subkey,
-            opt_params=self.icem_params,
-            system=learned_system,
-            cost_fn=self.cost_fn,
-            use_optimism=self.use_optimism,
-            use_pessimism=self.use_pessimism,
-        )
+        if self.optimizer == 'icem':
+            optimizer = iCemTO(
+                horizon=self.icem_horizon,
+                action_dim=self.env.action_size,
+                key=subkey,
+                opt_params=self.icem_params,
+                system=learned_system,
+                cost_fn=self.cost_fn,
+                use_optimism=self.use_optimism,
+                use_pessimism=self.use_pessimism,
+            )
+        elif self.optimizer == 'ipopt':
+            optimizer = IPOPTOptimizer(
+                horizon=self.icem_horizon,
+                action_dim=self.env.action_size,
+                key=subkey,
+                opt_params=self.ipopt_params,
+                system=learned_system,
+                cost_fn=self.cost_fn,
+                use_optimism=self.use_optimism,
+                use_pessimism=self.use_pessimism,
+            )
 
         key, subkey = jr.split(key)
         optimizer_state = optimizer.init(key=subkey)
