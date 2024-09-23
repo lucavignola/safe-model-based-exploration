@@ -60,6 +60,7 @@ def experiment(
     from jax import vmap
     from brax.envs.base import State
     from bsm.utils import Data, Stats, DataStats
+    from smbrl.agent.actsafe import Task
 
     configs = dict(
         alg_name=alg_name,
@@ -253,10 +254,10 @@ def experiment(
         episode_length=episode_length,
         action_repeat=action_repeat,
         cost_fn=cost_fn,
-        test_tasks=[],
-        # test_tasks=[Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
-        #             Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
-        #             ],
+        # test_tasks=[],
+        test_tasks=[Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
+                    Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
+                    ],
         predict_difference=True,
         num_training_steps=constant_schedule(num_training_steps),
         icem_horizon=icem_horizon,

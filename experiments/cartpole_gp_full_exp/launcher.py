@@ -1,7 +1,7 @@
 import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 
-PROJECT_NAME = 'CartPoleGP20Sept16_00_GPU'
+PROJECT_NAME = 'CartPoleGP20Sept16_30_GPU'
 ENTITY = 'trevenl'
 NUM_GPUS = 1
 
@@ -14,11 +14,11 @@ _applicable_configs = {
     'entity': [ENTITY],
     'num_gpus': [NUM_GPUS],
 
-    'beta': [2.0, ],
+    'beta': [1.0, 2.0, ],
     'use_precomputed_kernel_params': [0, ],
     'use_function_norms': [0],
 
-    'num_offline_data': [50, ],
+    'num_offline_data': [10, 20, 30, 40],
 
     'max_position': [1.5],
 
@@ -35,10 +35,14 @@ _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'us
 
 all_flags_combinations = dict_permutations(_applicable_configs_actsafe)
 
+_applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0]} \
+                                           | _applicable_configs
 
-# _applicable_configs_actsafe_no_optimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [1]} \
-#                                           | _applicable_configs
+all_flags_combinations = dict_permutations(_applicable_configs_actsafe) + dict_permutations(
+    _applicable_configs_actsafe_no_pessimism)
 
+
+#
 # _applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0]} \
 #                                            | _applicable_configs
 #
@@ -46,10 +50,9 @@ all_flags_combinations = dict_permutations(_applicable_configs_actsafe)
 #                                 | _applicable_configs
 
 # all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
-#                          + dict_permutations(_applicable_configs_actsafe_no_optimism) \
 #                          + dict_permutations(_applicable_configs_actsafe_no_pessimism) \
 #                          + dict_permutations(_applicable_configs_safehucrl)
-#
+
 
 def main():
     command_list = []
