@@ -21,7 +21,7 @@ def experiment(
         icem_horizon: int = 20,
         episode_length: int = 50,
         action_repeat: int = 2,
-        max_radius: float = 2.0,
+        max_radius: float = 2.5,
         num_training_steps: int = 1_000,
         use_optimism: bool = True,
         use_pessimism: bool = True,
@@ -33,8 +33,9 @@ def experiment(
         beta: float = 3.0,
         use_precomputed_kernel_params: bool = False,
         use_function_norms: bool = False,
+        num_offline_data: int = 10,
+        violation_eps: float = 0.1,
 ):
-    violation_eps = 0.1
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
@@ -51,11 +52,15 @@ def experiment(
     from mbpo.systems.rewards.base_rewards import Reward
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.racecar import RCCar, ToleranceReward, decode_angles
-    from smbrl.playground.racecar_icem import RadiusBound
+    from smbrl.playground.racecar_icem import RadiusBoundBinary
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
+    import jax
+    from mbrl.utils.offline_data import OfflineData
+    jax.config.update("jax_enable_x64", True)
 
-    env = RCCar(dt=0.03)
+    MARGIN = 10
+    env = RCCar(dt=0.03, margin_factor=MARGIN)
     configs = dict(
         alg_name=alg_name,
         seed=seed,
@@ -78,12 +83,13 @@ def experiment(
         violation_eps=violation_eps,
         beta=beta,
         use_precomputed_kernel_params=use_precomputed_kernel_params,
-        use_function_norms=use_function_norms
+        use_function_norms=use_function_norms,
+        num_offline_data=num_offline_data,
     )
     key = jr.PRNGKey(seed)
 
     precomputed_normalization_stats = None
-    num_training_steps = constant_schedule(1000)
+    num_training_steps = constant_schedule(num_training_steps)
 
     if log_wandb:
         wandb.init(project=project_name,
@@ -92,15 +98,32 @@ def experiment(
                    entity=entity_name,
                    )
 
+    class RacCarOfflineData(OfflineData):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def _sample_states(self,
+                           key: chex.PRNGKey,
+                           num_samples: int):
+            key_pos, key_angle, key_vel, key_obs = jr.split(key, 4)
+            init_pos = jax.random.uniform(key_pos, shape=(num_samples, 2), minval=-3, maxval=3)
+            init_theta = jax.random.uniform(key_angle, shape=(num_samples, 1), minval=-jnp.pi, maxval=jnp.pi)
+            init_vel = jax.random.normal(key_vel, shape=(num_samples, 3))
+            state = jnp.concatenate([init_pos, init_theta, init_vel], axis=-1)
+            state = self.env._state_to_obs(state, rng_key=key_obs)
+            return state
+
+        def _sample_actions(self,
+                            key: chex.PRNGKey,
+                            num_samples: int):
+            actions = jr.uniform(key, shape=(num_samples, 2), minval=-1, maxval=1)
+            return actions
+
+    offline_data_gen = RacCarOfflineData(env=env)
     if use_precomputed_kernel_params:
-        import jax
-        jax.config.update("jax_enable_x64", True)
-
-        from mbrl.utils.offline_data import OfflineData
-
         # using dummy model to fit to data for getting kernel params
         dummy_model = GPStatisticalModel(
-            kernel=ARD(input_dim=env.observation_size + env.action_size),
+            kernel=ARD(input_dim=env.observation_size + env.action_size, length_scale=0.05),
             input_dim=env.observation_size + env.action_size,
             output_dim=env.observation_size,
             output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
@@ -115,28 +138,6 @@ def experiment(
 
         init_model_state = dummy_model.init(key=model_key)
 
-        class RacCarOfflineData(OfflineData):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-
-            def _sample_states(self,
-                               key: chex.PRNGKey,
-                               num_samples: int):
-                key_pos, key_angle, key_vel, key_obs = jr.split(key, 4)
-                init_pos = jax.random.uniform(key_pos, shape=(num_samples, 2), minval=-3, maxval=3)
-                init_theta = jax.random.uniform(key_angle, shape=(num_samples, 1), minval=-jnp.pi, maxval=jnp.pi)
-                init_vel = jax.random.normal(key_vel, shape=(num_samples, 3))
-                state = jnp.concatenate([init_pos, init_theta, init_vel], axis=-1)
-                state = self.env._state_to_obs(state, rng_key=key_obs)
-                return state
-
-            def _sample_actions(self,
-                                key: chex.PRNGKey,
-                                num_samples: int):
-                actions = jr.uniform(key, shape=(num_samples, 2), minval=-1, maxval=1)
-                return actions
-
-        offline_data_gen = RacCarOfflineData(env=env)
         offline_data_key, key = jr.split(key)
         offline_data = offline_data_gen.sample_transitions(key=offline_data_key,
                                                            num_samples=100)
@@ -153,10 +154,15 @@ def experiment(
         del dummy_model, init_model_state, updated_model_state, offline_data
         num_training_steps = constant_schedule(0)
 
-    offline_data = None
+    offline_data_key, key = jr.split(key, 2)
+    offline_data = offline_data_gen.sample_transitions(key=offline_data_key,
+                                                       num_samples=num_offline_data)
+    offline_data = Data(inputs=jnp.concatenate([offline_data.observation, offline_data.action], axis=-1),
+                        outputs=offline_data.next_observation - offline_data.observation,
+                        )
 
     model = GPStatisticalModel(
-        kernel=ARD(input_dim=env.observation_size + env.action_size),
+        kernel=ARD(input_dim=env.observation_size + env.action_size, length_scale=0.05),
         input_dim=env.observation_size + env.action_size,
         output_dim=env.observation_size,
         output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
@@ -178,7 +184,7 @@ def experiment(
         dim_action: Tuple[int] = (2,)
         encode_angle: bool = True
 
-        def __init__(self, ctrl_cost_weight: float = 0.005, bound: float = 0.1, margin_factor: float = 10.0,
+        def __init__(self, ctrl_cost_weight: float = 0.005, bound: float = 0.1, margin_factor: float = MARGIN,
                      target_angle: float = 0.0,
                      ):
             super().__init__(x_dim=6 + self.encode_angle, u_dim=self.dim_action[0])
@@ -254,9 +260,9 @@ def experiment(
         lambda_constraint=lambda_constraint,
     )
 
-    cost_fn = RadiusBound(horizon=icem_horizon,
-                          max_radius=max_radius,
-                          violation_eps=violation_eps, )
+    cost_fn = RadiusBoundBinary(horizon=icem_horizon,
+                                max_radius=max_radius,
+                                violation_eps=violation_eps, )
 
     agent = alg(
         env=env,
@@ -284,8 +290,7 @@ def experiment(
         model_state.model_state.params = precomputed_kernel_params
         model_state.model_state.data_stats = precomputed_normalization_stats
 
-
-    agent.run_episodes(num_episodes=20,
+    agent.run_episodes(num_episodes=10,
                        key=key,
                        model_state=model_state,
                        folder_name=f'{alg_name}/{exp_hash}/{logs_dir}/',
@@ -341,6 +346,8 @@ def main(args):
         beta=args.beta,
         use_precomputed_kernel_params=bool(args.use_precomputed_kernel_params),
         use_function_norms=bool(args.use_function_norms),
+        num_offline_data=args.num_offline_data,
+        violation_eps=args.violation_eps,
     )
 
 
@@ -361,7 +368,7 @@ if __name__ == '__main__':
     parser.add_argument('--icem_horizon', type=int, default=50)
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
-    parser.add_argument('--max_radius', type=float, default=2.0)
+    parser.add_argument('--max_radius', type=float, default=2.5)
     parser.add_argument('--num_training_steps', type=int, default=1_000)
     parser.add_argument('--use_optimism', type=int, default=1)
     parser.add_argument('--use_pessimism', type=int, default=1)
@@ -370,8 +377,10 @@ if __name__ == '__main__':
     parser.add_argument('--function_norm', type=float, default=1.0)
     parser.add_argument('--num_elites', type=int, default=50)
     parser.add_argument('--beta', type=float, default=1.0)
-    parser.add_argument('--use_precomputed_kernel_params', type=int, default=1)
+    parser.add_argument('--use_precomputed_kernel_params', type=int, default=0)
     parser.add_argument('--use_function_norms', type=int, default=0)
+    parser.add_argument('--num_offline_data', type=int, default=10)
+    parser.add_argument('--violation_eps', type=float, default=0.5)
 
     parser.add_argument('--seed', type=int, default=1)
 

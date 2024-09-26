@@ -1,4 +1,3 @@
-
 import time
 from typing import Tuple
 
@@ -123,6 +122,24 @@ class RadiusBound(AbstractCost):
         return jnp.mean(trajectory_constraint)
 
 
+class RadiusBoundBinary(AbstractCost):
+
+    def __init__(self, *args, max_radius: float = 2.0, violation_eps=1e-3, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_radius = max_radius
+        self.violation_eps = violation_eps
+
+    def __call__(self,
+                 states: Float[Array, 'horizon observation_dim'],
+                 actions: Float[Array, 'horizon action_dim'],
+                 ) -> Scalar:
+        dist_to_origin = jnp.linalg.norm(states[:, :2], ord=jnp.inf, axis=-1)
+
+        trajectory_constraint = dist_to_origin > (self.max_radius - self.violation_eps)
+        assert trajectory_constraint.shape == (self.horizon,)
+        return jnp.mean(trajectory_constraint)
+
+
 if __name__ == '__main__':
 
     action_repeat = 2
@@ -137,7 +154,7 @@ if __name__ == '__main__':
                               num_steps=5,
                               num_particles=1, ),
         system=ActionRepeatWrapper(action_repeat=action_repeat, system=RaceCarSystem()),
-        cost_fn=RadiusBound(horizon=horizon),
+        cost_fn=RadiusBoundBinary(horizon=horizon),
     )
 
     system = ActionRepeatWrapper(action_repeat=action_repeat, system=RaceCarSystem())
