@@ -53,12 +53,10 @@ def experiment(
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.cartpole_lenart import CartPoleEnv, CartPoleOfflineData
-    from smbrl.playground.cartpole_icem import PositionBound, PositionBoundBinary
+    from smbrl.playground.cartpole_icem import PositionBoundBinary
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
     from jaxtyping import Float, Array, Scalar
-    from jax import vmap
-    from brax.envs.base import State
     from bsm.utils import Data, Stats, DataStats
     from smbrl.agent.actsafe import Task
 
@@ -91,17 +89,6 @@ def experiment(
     import jax
     jax.config.update("jax_enable_x64", True)
 
-    # folder_name = 'cartpole_pole_weight_1'
-    # folder_name = os.path.join('../../smbrl/utils/', folder_name)
-    #
-    # with open(os.path.join(folder_name, 'kernel_params.pickle'), 'rb') as handle:
-    #     precomputed_kernel_params = pickle.load(handle)
-    #
-    # with open(os.path.join(folder_name, 'data_stats.pickle'), 'rb') as handle:
-    #     precomputed_normalization_stats = pickle.load(handle)
-    #
-    # with open(os.path.join(folder_name, 'norms.pickle'), 'rb') as handle:
-    #     precomputed_function_norms = pickle.load(handle)
     precomputed_kernel_params = {
         'pseudo_length_scale': jnp.array([[7.16197382, 6.65598727, 1.27592871, 5.13755356, 4.53211409,
                                            9.09040351],
@@ -254,9 +241,8 @@ def experiment(
         episode_length=episode_length,
         action_repeat=action_repeat,
         cost_fn=cost_fn,
-        # test_tasks=[],
-        test_tasks=[Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
-                    Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
+        test_tasks=[Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
+                    Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
                     ],
         predict_difference=True,
         num_training_steps=num_training_steps,

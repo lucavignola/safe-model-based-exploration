@@ -1,8 +1,8 @@
 import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 
-PROJECT_NAME = 'CartPoleGP24Sept16_30_GPU'
-ENTITY = 'sukhijab'
+PROJECT_NAME = 'CartPoleGP26Sept14_30_GPU'
+ENTITY = 'trevenl'
 NUM_GPUS = 1
 
 _applicable_configs = {
@@ -18,42 +18,45 @@ _applicable_configs = {
     'use_precomputed_kernel_params': [0, ],
     'use_function_norms': [0],
 
-    'num_offline_data': [10],
+    'num_offline_data': [0, 10],
 
     'max_position': [1.5],
 
     'num_samples': [1000],
     'icem_horizon': [30, ],
     'num_elites': [100],
-    'num_steps': [50],
+    'num_steps': [5],
     'violation_eps': [0.0, 0.25, 0.5],
 }
 
-_applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1],
+_applicable_configs_actsafe = {'alg_name': ['ActSafe'],
+                               'use_optimism': [1],
+                               'use_pessimism': [1],
                                'num_particles': [30],
-                               } \
-                              | _applicable_configs
+                               } | _applicable_configs
 
-all_flags_combinations = dict_permutations(_applicable_configs_actsafe)
+_applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'],
+                                            'use_optimism': [0],
+                                            'use_pessimism': [0],
+                                            'num_particles': [1]
+                                            } | _applicable_configs
 
-_applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0],
-                                            'num_particles': [1]} \
-                                           | _applicable_configs
+_applicable_configs_opax = {'alg_name': ['OPAX'],
+                            'use_optimism': [1],
+                            'use_pessimism': [1],
+                            'num_particles': [30],
+                            } | _applicable_configs
 
-all_flags_combinations = dict_permutations(_applicable_configs_actsafe) + dict_permutations(
-    _applicable_configs_actsafe_no_pessimism)
+_applicable_configs_safehucrl = {'alg_name': ['SafeHUCRL'],
+                                 'use_optimism': [1],
+                                 'use_pessimism': [1],
+                                 'num_particles': [30],
+                                 } | _applicable_configs
 
-
-#
-# _applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0]} \
-#                                            | _applicable_configs
-#
-# _applicable_configs_safehucrl = {'alg_name': ['SafeHUCRL'], 'use_optimism': [1], 'use_pessimism': [1]} \
-#                                 | _applicable_configs
-
-# all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
-#                          + dict_permutations(_applicable_configs_actsafe_no_pessimism) \
-#                          + dict_permutations(_applicable_configs_safehucrl)
+all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
+                         + dict_permutations(_applicable_configs_actsafe_no_pessimism) \
+                         + dict_permutations(_applicable_configs_opax) \
+                         + dict_permutations(_applicable_configs_safehucrl)
 
 
 def main():
