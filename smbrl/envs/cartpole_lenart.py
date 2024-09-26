@@ -13,11 +13,11 @@ from jaxtyping import Float, Array, Scalar
 
 @chex.dataclass
 class CartPoleDynamicsParams:
-    max_torque: chex.Array = struct.field(default_factory=lambda: jnp.array(10.0))
+    max_torque: chex.Array = struct.field(default_factory=lambda: jnp.array(15.0))
     dt: chex.Array = struct.field(default_factory=lambda: jnp.array(0.05))
     g: chex.Array = struct.field(default_factory=lambda: jnp.array(9.81))
     m_1: chex.Array = struct.field(default_factory=lambda: jnp.array(1.0))
-    m_c: chex.Array = struct.field(default_factory=lambda: jnp.array(1.0))
+    m_c: chex.Array = struct.field(default_factory=lambda: jnp.array(5.0))
     l_1: chex.Array = struct.field(default_factory=lambda: jnp.array(1.0))
 
 

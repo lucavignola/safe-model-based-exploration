@@ -53,7 +53,7 @@ def experiment(
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.cartpole_lenart import CartPoleEnv, CartPoleOfflineData
-    from smbrl.playground.cartpole_icem import PositionBound
+    from smbrl.playground.cartpole_icem import PositionBound, PositionBoundBinary
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
     from jaxtyping import Float, Array, Scalar
@@ -144,7 +144,7 @@ def experiment(
     if use_precomputed_kernel_params:
         num_training_steps = constant_schedule(0)
     else:
-        num_training_steps = constant_schedule(1000)
+        num_training_steps = constant_schedule(num_training_steps)
 
     if use_function_norms:
         model = GPStatisticalModel(
@@ -244,9 +244,9 @@ def experiment(
         lambda_constraint=lambda_constraint,
     )
 
-    cost_fn = PositionBound(horizon=icem_horizon,
-                            max_position=max_position,
-                            violation_eps=violation_eps, )
+    cost_fn = PositionBoundBinary(horizon=icem_horizon,
+                                  max_position=max_position,
+                                  violation_eps=violation_eps, )
 
     agent = alg(
         env=CartPoleEnv(),
@@ -259,7 +259,7 @@ def experiment(
                     Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
                     ],
         predict_difference=True,
-        num_training_steps=constant_schedule(num_training_steps),
+        num_training_steps=num_training_steps,
         icem_horizon=icem_horizon,
         icem_params=icem_params,
         log_to_wandb=log_wandb,
@@ -286,7 +286,7 @@ def experiment(
                    dir='/cluster/scratch/' + entity_name,
                    entity=entity_name,
                    )
-    agent.run_episodes(num_episodes=20,
+    agent.run_episodes(num_episodes=10,
                        key=key,
                        model_state=model_state,
                        folder_name=f'{alg_name}/{exp_hash}/{logs_dir}/',
@@ -356,13 +356,13 @@ if __name__ == '__main__':
     parser.add_argument('--logs_dir', type=str, default='logs')
     parser.add_argument('--project_name', type=str, default='ActSafeTest')
     parser.add_argument('--alg_name', type=str, default='ActSafe')
-    parser.add_argument('--entity_name', type=str, default='trevenl')
+    parser.add_argument('--entity_name', type=str, default='sukhijab')
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)
     parser.add_argument('--alpha', type=float, default=0.2)
     parser.add_argument('--num_steps', type=int, default=5)
     parser.add_argument('--exponent', type=float, default=1.0)
-    parser.add_argument('--lambda_constraint', type=float, default=1e6)
+    parser.add_argument('--lambda_constraint', type=float, default=1e8)
     parser.add_argument('--icem_horizon', type=int, default=50)
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
