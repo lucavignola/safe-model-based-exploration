@@ -66,7 +66,7 @@ def main(args):
     logs_dir = '../'
     if args.mode == 'euler':
         logs_dir = '/cluster/scratch/'
-        logs_dir += ENTITY + '/' + PROJECT_NAME + '/'
+        logs_dir += 'lvignola' + '/' + PROJECT_NAME + '/'
 
     for flags in all_flags_combinations:
         flags['logs_dir'] = logs_dir
