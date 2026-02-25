@@ -13,11 +13,7 @@ from jax.nn import relu
 from jax.numpy import sqrt, newaxis
 from jax.numpy.fft import irfft, rfftfreq
 from jaxtyping import Float, Array, Key, Scalar
-from mbpo.optimizers.base_optimizer import BaseOptimizer
-from mbpo.systems.dynamics.base_dynamics import DynamicsParams
-from mbpo.systems.rewards.base_rewards import RewardParams
-from mbpo.utils.optimizer_utils import rollout_actions
-from mbpo.utils.type_aliases import OptimizerState
+from smbrl.mbpo_stubs import BaseOptimizer, DynamicsParams, RewardParams, rollout_actions, OptimizerState
 
 
 @partial(jax.jit, static_argnums=(0, 1, 3))
@@ -185,9 +181,12 @@ class ICemCarry(NamedTuple):
 
 
 @chex.dataclass
-class iCemOptimizerState(OptimizerState, Generic[DynamicsParams, RewardParams]):
-    best_sequence: chex.Array
-    best_reward: chex.Array
+class iCemOptimizerState(OptimizerState[DynamicsParams, RewardParams]):
+    true_buffer_state: chex.Array = None
+    system_params: chex.Array = None
+    best_sequence: chex.Array = None
+    best_reward: chex.Array = None
+    key: chex.Array = None
 
     @property
     def action(self):
@@ -209,7 +208,7 @@ class AbstractCost:
         pass
 
 
-class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
+class iCemTO(BaseOptimizer):
     def __init__(self,
                  horizon: int,
                  action_dim: int,
@@ -218,9 +217,11 @@ class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
                  cost_fn: AbstractCost | None = None,
                  use_optimism: bool = True,
                  use_pessimism: bool = True,
+                 system=None,
                  *args,
                  **kwargs):
-        super().__init__(*args, **kwargs)
+        # Store the system which is needed by the init method
+        self.system = system
         self.horizon = horizon
         self.opt_params = opt_params
         self.key = key
@@ -315,7 +316,7 @@ class iCemTO(BaseOptimizer, Generic[DynamicsParams, RewardParams]):
             assert values.shape == (self.opt_params.num_samples + num_prev_elites_per_iter,)
 
             # Prepare indices of elite samples (i.e. samples with the highest reward)
-            best_elite_idx = np.argsort(values, axis=0)[-self.opt_params.num_elites:]
+            best_elite_idx = jnp.argsort(values, axis=0)[-self.opt_params.num_elites:]
 
             # Take elite actions and their values
             elites = action_samples[best_elite_idx]

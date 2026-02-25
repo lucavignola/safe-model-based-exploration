@@ -18,7 +18,7 @@ from bsm.utils.type_aliases import ModelState
 from distrax import Distribution, Normal
 from flax import struct
 from jaxtyping import Key, Array, PyTree, Float
-from mbpo.systems.rewards.base_rewards import Reward, RewardParams
+from smbrl.mbpo_stubs import Reward, RewardParams
 from optax import Schedule, constant_schedule
 
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics

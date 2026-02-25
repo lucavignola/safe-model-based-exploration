@@ -1,0 +1,30 @@
+# Compatible versions for safe-model-based-exploration
+# pinned to avoid brax.v1 import issues
+
+# Core JAX ecosystem - use older versions for brax compatibility
+jax>=0.4.13,<0.4.20
+jaxlib>=0.4.13,<0.4.20
+
+# Brax - use version that still has v1 compatibility
+brax==0.9.0
+
+# Other core dependencies
+chex>=0.1.0
+wandb
+pandas
+jaxtyping>=0.2.20
+matplotlib>=3.5.1
+
+# Optimization and ML dependencies
+optax
+distrax
+flax
+numpy<2.0.0  # For compatibility with older packages
+
+# Additional dependencies that might be needed
+scipy
+scikit-learn
+
+# Development tools
+ipython
+jupyter
