@@ -1,8 +1,8 @@
 import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 
-PROJECT_NAME = 'CartPoleGP26Sept14_30_GPU'
-ENTITY = 'trevenl'
+PROJECT_NAME = 'CartPoleGP'
+ENTITY = 'lvignola-eth-z-rich'
 NUM_GPUS = 1
 
 _applicable_configs = {

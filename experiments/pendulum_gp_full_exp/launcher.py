@@ -2,8 +2,8 @@ import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 import argparse
 
-PROJECT_NAME = 'PendulumGP12Sept15_00_GPU'
-ENTITY = 'sukhijab'
+PROJECT_NAME = 'PendulumGP'
+ENTITY = 'lvignola-eth-z-rich'
 NUM_GPUS = 1
 
 _applicable_configs = {
