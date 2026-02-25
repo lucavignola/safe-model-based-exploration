@@ -63,11 +63,11 @@ _applicable_configs_actsafe_mean = {'alg_name': ['ActSafe'], 'use_optimism': [0]
                                     } \
                                    | _applicable_configs
 
-all_flags_combinations = dict_permutations(_applicable_configs_actsafe) #\
-# + dict_permutations(_applicable_configs_actsafe_mean) \
-# + dict_permutations(_applicable_configs_safehucrl) \
-# + dict_permutations(_applicable_configs_opax) \
-# + dict_permutations(_applicable_configs_hucrl)
+all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
+                         + dict_permutations(_applicable_configs_actsafe_mean) \
+                         + dict_permutations(_applicable_configs_safehucrl) \
+                         + dict_permutations(_applicable_configs_opax) \
+                         + dict_permutations(_applicable_configs_hucrl)
 
 
 
@@ -79,9 +79,10 @@ all_flags_combinations = dict_permutations(_applicable_configs_actsafe) #\
 
 def main(args):
     command_list = []
-    logs_dir = './logs/'  # cartella locale
-    import os
-    os.makedirs(logs_dir, exist_ok=True)
+    logs_dir = '../'
+    if args.mode == 'euler':
+        logs_dir = '/cluster/scratch/'
+        logs_dir += ENTITY + '/' + PROJECT_NAME + '/'
 
     for flags in all_flags_combinations:
         flags['logs_dir'] = logs_dir
@@ -89,20 +90,14 @@ def main(args):
         command_list.append(cmd)
 
     # submit jobs
-    if args.mode == 'local':
-        print(f"Running {len(command_list)} commands locally...")
-        for cmd in command_list:
-            print("Executing:", cmd)
-            os.system(cmd)  # esegue direttamente il comando Python
-    else:
-        num_hours = 23 if args.long_run else 3
-        generate_run_commands(command_list,
-                              num_cpus=args.num_cpus,
-                              num_gpus=NUM_GPUS,
-                              mode=args.mode,
-                              duration=f'{num_hours}:59:00',
-                              prompt=True,
-                              mem=16000)
+    num_hours = 23 if args.long_run else 3
+    generate_run_commands(command_list,
+                          num_cpus=args.num_cpus,
+                          num_gpus=NUM_GPUS,
+                          mode=args.mode,
+                          duration=f'{num_hours}:59:00',
+                          prompt=True,
+                          mem=16000)
 
 
 if __name__ == '__main__':
