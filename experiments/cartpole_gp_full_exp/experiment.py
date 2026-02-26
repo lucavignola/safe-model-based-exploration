@@ -269,7 +269,7 @@ def experiment(
     if log_wandb:
         wandb.init(project=project_name,
                    config=configs,
-                   dir='/cluster/scratch/' + entity_name,
+                   dir='/cluster/scratch/lvignola',
                    entity=entity_name,
                    )
     agent.run_episodes(num_episodes=10,

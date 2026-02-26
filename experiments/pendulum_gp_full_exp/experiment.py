@@ -217,7 +217,7 @@ def experiment(
         wandb.init(project=project_name,
                    config=configs,
                    entity=entity_name,
-                   dir=logs_dir,
+                   dir='/cluster/scratch/lvignola' if logs_dir.startswith('/cluster/scratch/') else logs_dir,
                    )
 
     model_state = model.init(jr.PRNGKey(seed))
