@@ -31,8 +31,14 @@ _applicable_configs_actsafe_mean = {'alg_name': ['ActSafe'], 'use_optimism': [1]
                                     } \
                                    | _applicable_configs
 
+_applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pessimism': [1],
+                             'beta': [3.0], 'num_particles': [10],
+                             } \
+                            | _applicable_configs
+
 all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
-                         + dict_permutations(_applicable_configs_actsafe_mean)
+                         + dict_permutations(_applicable_configs_actsafe_mean) \
+                         + dict_permutations(_applicable_configs_sbsrl)
 
 
 # _applicable_configs_actsafe_no_optimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [1]} \

@@ -33,6 +33,12 @@ _applicable_configs_opax = {'alg_name': ['OPAX'], 'use_optimism': [1], 'use_pess
                             } \
                            | _applicable_configs
 
+_applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pessimism': [1],
+                             'num_particles': [30],
+                             'beta': [3.0],
+                             } \
+                            | _applicable_configs
+
 # _applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0],
 #                                             'num_particles': [1],
 #                                             'beta': [3.0],
@@ -67,6 +73,7 @@ all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
                          + dict_permutations(_applicable_configs_actsafe_mean) \
                          + dict_permutations(_applicable_configs_safehucrl) \
                          + dict_permutations(_applicable_configs_opax) \
+                         + dict_permutations(_applicable_configs_sbsrl) \
                          + dict_permutations(_applicable_configs_hucrl)
 
 

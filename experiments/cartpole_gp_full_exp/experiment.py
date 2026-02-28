@@ -36,6 +36,9 @@ def experiment(
         num_offline_data: int = 0,
         violation_eps: float = 0.1,
         optimizer: str = 'icem',
+        lambda_sigma: float = 1.0,
+        uncertainty_eps: float = 1.0,
+        default_task_index: int = 0,
 ):
     if num_gpus == 0:
         import os
@@ -46,6 +49,7 @@ def experiment(
     import chex
     import wandb
     from smbrl.agent.actsafe import ActSafeAgent, SafeHUCRL
+    from smbrl.agent.sbsrl import SBSRLAgent
     from flax import struct
     from distrax import Distribution, Normal
     from typing import Tuple
@@ -84,7 +88,10 @@ def experiment(
         use_precomputed_kernel_params=use_precomputed_kernel_params,
         use_function_norms=use_function_norms,
         num_offline_data=num_offline_data,
-        optimizer=optimizer
+        optimizer=optimizer,
+        lambda_sigma=lambda_sigma,
+        uncertainty_eps=uncertainty_eps,
+        default_task_index=default_task_index
     )
     import jax
     jax.config.update("jax_enable_x64", True)
@@ -219,6 +226,8 @@ def experiment(
     elif alg_name == 'OPAX':
         alg = ActSafeAgent
         lambda_constraint = 0.0
+    elif alg_name == 'SBSRL':
+        alg = SBSRLAgent
     else:
         raise NotImplementedError
 
@@ -235,24 +244,35 @@ def experiment(
                                   max_position=max_position,
                                   violation_eps=violation_eps, )
 
-    agent = alg(
-        env=CartPoleEnv(),
-        model=model,
-        episode_length=episode_length,
-        action_repeat=action_repeat,
-        cost_fn=cost_fn,
-        test_tasks=[Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
-                    Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
-                    ],
-        predict_difference=True,
-        num_training_steps=num_training_steps,
-        icem_horizon=icem_horizon,
-        icem_params=icem_params,
-        log_to_wandb=log_wandb,
-        use_pessimism=use_pessimism,
-        use_optimism=use_optimism,
-        optimizer=optimizer,
-    )
+    # Create agent with appropriate parameters
+    agent_kwargs = {
+        'env': CartPoleEnv(),
+        'model': model,
+        'episode_length': episode_length,
+        'action_repeat': action_repeat,
+        'cost_fn': cost_fn,
+        'test_tasks': [Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
+                       Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
+                      ],
+        'predict_difference': True,
+        'num_training_steps': num_training_steps,
+        'icem_horizon': icem_horizon,
+        'icem_params': icem_params,
+        'log_to_wandb': log_wandb,
+        'use_pessimism': use_pessimism,
+        'use_optimism': use_optimism,
+        'optimizer': optimizer,
+    }
+    
+    # Add SBSRL-specific parameters if needed
+    if alg_name == 'SBSRL':
+        agent_kwargs.update({
+            'lambda_sigma': lambda_sigma,
+            'uncertainty_eps': uncertainty_eps,
+            'default_task_index': default_task_index,
+        })
+    
+    agent = alg(**agent_kwargs)
 
     model_state = model.init(jr.PRNGKey(seed))
 
@@ -332,6 +352,9 @@ def main(args):
         num_offline_data=args.num_offline_data,
         violation_eps=args.violation_eps,
         optimizer=args.optimizer,
+        lambda_sigma=args.lambda_sigma,
+        uncertainty_eps=args.uncertainty_eps,
+        default_task_index=args.default_task_index,
     )
 
 
@@ -366,6 +389,11 @@ if __name__ == '__main__':
     parser.add_argument('--num_offline_data', type=int, default=50)
     parser.add_argument('--violation_eps', type=float, default=0.1)
     parser.add_argument('--optimizer', type=str, default='icem')
+    
+    # SBSRL-specific parameters
+    parser.add_argument('--lambda_sigma', type=float, default=1.0)
+    parser.add_argument('--uncertainty_eps', type=float, default=1.0)
+    parser.add_argument('--default_task_index', type=int, default=0)
 
     parser.add_argument('--seed', type=int, default=0)
 

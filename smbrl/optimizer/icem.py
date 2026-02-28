@@ -262,6 +262,7 @@ class iCemTO(BaseOptimizer):
         # To estimate mean trajectory under some action sequence we sample self.opt_params.num_particles number of
         # noisy realization of the dynamics propagation
         def objective(seq: Float[Array, 'horizon action_dim'], key: Key[Array, '2']) -> Scalar:
+            from jax.nn import relu  # Import at function level #TODO: why? I think this is needed to avoid circular imports with actsafe and sbsrl reward that also use relu
 
             def optimize_fn(init_state: Float[Array, 'observation_dim'], rng: Key[Array, '2']):
                 system_params = opt_state.system_params.replace(key=rng)
@@ -276,8 +277,9 @@ class iCemTO(BaseOptimizer):
             transitions = jax.vmap(optimize_fn, in_axes=(None, 0))(initial_state, particles_rng)
             cost = 0
 
-            # We summarize cost with mean or max (if optimism is true)
+            # Standard case: use reward from system
             reward = self.summarize_raw_samples(jnp.mean(transitions.reward, axis=-1))
+            
             if self.cost_fn is not None:
                 cost = vmap(self.cost_fn)(transitions.observation, transitions.action)
                 assert cost.shape == (self.opt_params.num_particles,)

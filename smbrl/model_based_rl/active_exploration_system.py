@@ -134,8 +134,14 @@ class ExplorationSystem(System, Generic[ModelState, RewardParams]):
             # include the intrinsic reward in x_next
             reward_dist, new_reward_params = self.reward(x, u, reward_params, x_next)
         else:
-            # ignore the last state in x_next which is the intrinsic reward
-            reward_dist, new_reward_params = self.reward(x, u, reward_params, x_next[:-1])
+            # Check if it's an SBSRL reward that needs intrinsic reward
+            from smbrl.agent.sbsrl import SBSRLReward
+            if isinstance(self.reward, SBSRLReward): #TODO: I think this if can be merged with the one above
+                # SBSRL needs full x_next (with intrinsic reward) like ExplorationReward
+                reward_dist, new_reward_params = self.reward(x, u, reward_params, x_next)
+            else:
+                # ignore the last state in x_next which is the intrinsic reward
+                reward_dist, new_reward_params = self.reward(x, u, reward_params, x_next[:-1])
         reward = reward_dist.sample(seed=key)
         return reward, new_reward_params
 

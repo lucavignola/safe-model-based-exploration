@@ -35,6 +35,9 @@ def experiment(
         function_norm: float = 1.0,
         num_elites: int = 50,
         beta: float = 3.0,
+        lambda_sigma: float = 1.0,
+        uncertainty_eps: float = 1.0,
+        default_task_index: int = 0,
 ):
     violation_eps = 0.1
     if num_gpus == 0:
@@ -46,6 +49,7 @@ def experiment(
     import chex
     import wandb
     from smbrl.agent.actsafe import ActSafeAgent, SafeHUCRL, Task
+    from smbrl.agent.sbsrl import SBSRLAgent
     from flax import struct
     from distrax import Distribution, Normal
     from typing import Tuple
@@ -120,6 +124,9 @@ def experiment(
         num_elites=num_elites,
         violation_eps=violation_eps,
         beta=beta,
+        lambda_sigma=lambda_sigma,
+        uncertainty_eps=uncertainty_eps,
+        default_task_index=default_task_index
     )
 
     model = GPStatisticalModel(
@@ -177,6 +184,8 @@ def experiment(
     elif alg_name == 'OPAX':
         alg = ActSafeAgent
         lambda_constraint = 0.0
+    elif alg_name == 'SBSRL':
+        alg = SBSRLAgent
     else:
         raise NotImplementedError
 
@@ -194,24 +203,35 @@ def experiment(
                             max_abs_velocity=max_abs_velocity,
                             violation_eps=violation_eps, )
 
-    agent = alg(
-        env=PendulumEnv(margin_factor=env_margin_factor, reward_source=reward_source),
-        model=model,
-        episode_length=episode_length,
-        action_repeat=action_repeat,
-        cost_fn=cost_fn,
-        test_tasks=[
+    # Create agent with appropriate parameters
+    agent_kwargs = {
+        'env': PendulumEnv(margin_factor=env_margin_factor, reward_source=reward_source),
+        'model': model,
+        'episode_length': episode_length,
+        'action_repeat': action_repeat,
+        'cost_fn': cost_fn,
+        'test_tasks': [
             Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
             Task(reward=PendulumReward(), name='Swing up', env=env),
         ],
-        predict_difference=True,
-        num_training_steps=constant_schedule(num_training_steps),
-        icem_horizon=icem_horizon,
-        icem_params=icem_params,
-        log_to_wandb=log_wandb,
-        use_pessimism=use_pessimism,
-        use_optimism=use_optimism,
-    )
+        'predict_difference': True,
+        'num_training_steps': constant_schedule(num_training_steps),
+        'icem_horizon': icem_horizon,
+        'icem_params': icem_params,
+        'log_to_wandb': log_wandb,
+        'use_pessimism': use_pessimism,
+        'use_optimism': use_optimism,
+    }
+    
+    # Add SBSRL-specific parameters if needed
+    if alg_name == 'SBSRL':
+        agent_kwargs.update({
+            'lambda_sigma': lambda_sigma,
+            'uncertainty_eps': uncertainty_eps,
+            'default_task_index': default_task_index,
+        })
+    
+    agent = alg(**agent_kwargs)
 
     if log_wandb:
         wandb.init(project=project_name,
@@ -298,6 +318,9 @@ def main(args):
         function_norm=args.function_norm,
         num_elites=args.num_elites,
         beta=args.beta,
+        lambda_sigma=args.lambda_sigma,
+        uncertainty_eps=args.uncertainty_eps,
+        default_task_index=args.default_task_index,
     )
 
 
@@ -330,6 +353,11 @@ if __name__ == '__main__':
     parser.add_argument('--function_norm', type=float, default=1.0)
     parser.add_argument('--num_elites', type=int, default=100)
     parser.add_argument('--beta', type=float, default=3.0)
+    
+    # SBSRL-specific parameters
+    parser.add_argument('--lambda_sigma', type=float, default=1.0, help='Weight for exploration penalty in SBSRL')
+    parser.add_argument('--uncertainty_eps', type=float, default=1.0, help='Uncertainty threshold for SBSRL')
+    parser.add_argument('--default_task_index', type=int, default=0, help='Which task reward to use as extrinsic component in SBSRL')
 
     parser.add_argument('--seed', type=int, default=0)
 
@@ -337,3 +365,22 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     main(args)
+
+
+def run_sbsrl(lambda_sigma=1.0, uncertainty_eps=1.0, default_task_index=0, seed=0, episode_length=5, num_particles=2, num_samples=10, num_elites=5, **kwargs):
+    """
+    Simple function to run SBSRL experiment with default parameters
+    """
+    return experiment(
+        alg_name='SBSRL',
+        lambda_sigma=lambda_sigma,
+        uncertainty_eps=uncertainty_eps,
+        default_task_index=default_task_index,
+        seed=seed,
+        episode_length=episode_length,
+        num_particles=num_particles,
+        num_samples=num_samples,
+        num_elites=num_elites,
+        log_wandb=False,  # Default to false for testing
+        **kwargs
+    )

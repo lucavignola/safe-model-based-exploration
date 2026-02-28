@@ -44,7 +44,8 @@ def experiment(
     import jax.random as jr
     import chex
     import wandb
-    from smbrl.agent.actsafe import ActSafeAgent, SafeHUCRL, Task
+    from smbrl.agent.actsafe import ActSafeAgent, SafeHUCRL
+    from smbrl.agent.sbsrl import SBSRLAgent, Task
     from flax import struct
     from distrax import Normal
     from typing import Tuple
@@ -248,6 +249,8 @@ def experiment(
     elif alg_name == 'OPAX':
         alg = ActSafeAgent
         lambda_constraint = 0.0
+    elif alg_name == 'SBSRL':
+        alg = SBSRLAgent
     else:
         raise NotImplementedError
 

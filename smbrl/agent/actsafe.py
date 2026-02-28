@@ -170,7 +170,7 @@ class SafeModelBasedAgent:
 
     def get_train_env_state(self, rng: jax.Array) -> State:
         if self.train_task_index == -1:
-            return self.env.reset(rng=rng)
+            return self.env.reset(rng=rng) #TODO: what does this return?
         else:
             env = self.test_tasks[self.train_task_index].env
             return env.reset(rng=rng)
@@ -236,7 +236,7 @@ class SafeModelBasedAgent:
             for _ in range(self.action_repeat):
                 env_state = self.env.step(env_state, action)
                 extrinsic_rewards.append(env_state.reward)
-            # Calculate extrinsic reward
+            # Calculate intrinsic reward
             z = jnp.concatenate([env_state.obs, action])
             pred = self.model(z, model_state)
             epistemic_std, aleatoric_std = pred.epistemic_std, pred.aleatoric_std
