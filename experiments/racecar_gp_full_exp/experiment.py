@@ -94,14 +94,30 @@ def experiment(
     num_training_steps = constant_schedule(num_training_steps)
 
     if log_wandb:
+        import wandb
+        
+        # Setup wandb environment for Euler if needed
+        if logs_dir and logs_dir.startswith('/cluster/scratch/'):
+            import os
+            if not os.getenv('WANDB_CACHE_DIR'):
+                os.environ['WANDB_CACHE_DIR'] = '/cluster/scratch/lvignola/wandb'
+                os.environ['WANDB_CONFIG_DIR'] = '/cluster/scratch/lvignola/wandb/config'
+                os.environ['WANDB_DATA_DIR'] = '/cluster/scratch/lvignola/wandb/data'
+        
         wandb_kwargs = {
             'project': project_name,
-            'config': configs,
-            'dir': '/cluster/scratch/lvignola',
             'entity': entity_name,
+            'config': configs,
+            'resume': 'allow',  # Allow resuming if run exists
         }
         if wandb_notes:
             wandb_kwargs['notes'] = wandb_notes
+        
+        # Only set dir if not on cluster to avoid permission issues  
+        if not logs_dir or not logs_dir.startswith('/cluster/scratch/'):
+            if logs_dir:
+                wandb_kwargs['dir'] = logs_dir
+                
         wandb.init(**wandb_kwargs)
 
     class RacCarOfflineData(OfflineData):

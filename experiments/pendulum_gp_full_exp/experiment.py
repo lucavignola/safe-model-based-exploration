@@ -235,15 +235,30 @@ def experiment(
     agent = alg(**agent_kwargs)
 
     if log_wandb:
-        wandb_init_kwargs = {
+        import wandb
+        
+        # Setup wandb environment for Euler if needed
+        if logs_dir.startswith('/cluster/scratch/'):
+            import os
+            if not os.getenv('WANDB_CACHE_DIR'):
+                os.environ['WANDB_CACHE_DIR'] = '/cluster/scratch/lvignola/wandb'
+                os.environ['WANDB_CONFIG_DIR'] = '/cluster/scratch/lvignola/wandb/config'
+                os.environ['WANDB_DATA_DIR'] = '/cluster/scratch/lvignola/wandb/data'
+        
+        wandb_kwargs = {
             'project': project_name,
-            'config': configs,
             'entity': entity_name,
-            'dir': '/cluster/scratch/lvignola' if logs_dir.startswith('/cluster/scratch/') else logs_dir,
+            'config': configs,
+            'resume': 'allow',  # Allow resuming if run exists
         }
         if wandb_notes:
-            wandb_init_kwargs['notes'] = wandb_notes
-        wandb.init(**wandb_init_kwargs)
+            wandb_kwargs['notes'] = wandb_notes
+        
+        # Only set dir if not on cluster to avoid permission issues
+        if not logs_dir.startswith('/cluster/scratch/'):
+            wandb_kwargs['dir'] = logs_dir
+            
+        wandb.init(**wandb_kwargs)
 
     model_state = model.init(jr.PRNGKey(seed))
     # if num_offline_data > 0:

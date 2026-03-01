@@ -11,17 +11,17 @@ HARDWARE_CONFIGS = {
     '4090_rtx': {
         'gpu_type': 'rtx_4090',
         'cpus_per_task': 10,
-        'timeout_min': 60
+        'timeout_min': 180  # Increased from 60 to 180 min (3h)
     },
     'rtx_a6000': {
         'gpu_type': 'rtxa6000', 
         'cpus_per_task': 8,
-        'timeout_min': 120
+        'timeout_min': 180  # Increased from 120 to 180 min for consistency
     },
     'cpu_only': {
         'gpu_type': None,
         'cpus_per_task': 4,
-        'timeout_min': 240
+        'timeout_min': 300  # Increased from 240 to 300 min (5h)
     }
 }
 

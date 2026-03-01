@@ -28,6 +28,7 @@ def get_sweep_config(wandb_notes):
         'num_particles': [20],  # Fixed
         'num_training_steps': [1000],
         'log_wandb': [1],
+        'logs_dir': ['/cluster/scratch/lvignola/PendulumSweep/'],  # Ensure Euler path
         'wandb_notes': [wandb_notes] if wandb_notes else ['Mar01-sbsrl_sweep']
     }
 
@@ -52,12 +53,12 @@ def main(args=None):
         cmd = generate_base_command(experiment, flags=flags)
         command_list.append(cmd)
     
-    # Launch on Euler with RTX 4090
+    # Launch on Euler with RTX 4090 - increased timeout
     generate_run_commands(command_list,
                           num_cpus=10,
                           num_gpus=1,  
                           mode='euler',
-                          duration='2:00:00',  # 2h per job
+                          duration='3:00:00',  # Increased from 2h to 3h
                           gpu_type='rtx_4090',
                           prompt=True)
 
