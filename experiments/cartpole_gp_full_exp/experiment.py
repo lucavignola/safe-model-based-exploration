@@ -92,7 +92,8 @@ def experiment(
         optimizer=optimizer,
         lambda_sigma=lambda_sigma,
         uncertainty_eps=uncertainty_eps,
-        default_task_index=default_task_index
+        default_task_index=default_task_index,
+        wandb_notes=wandb_notes  # Add to config for visibility
     )
     import jax
     jax.config.update("jax_enable_x64", True)
@@ -306,6 +307,7 @@ def experiment(
         }
         if wandb_notes:
             wandb_kwargs['notes'] = wandb_notes
+            wandb_kwargs['tags'] = [wandb_notes]  # Also add as tags for easier filtering
         
         # Only set dir if not on cluster to avoid permission issues
         if not logs_dir.startswith('/cluster/scratch/'):

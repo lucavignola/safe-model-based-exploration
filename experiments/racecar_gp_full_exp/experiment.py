@@ -87,6 +87,7 @@ def experiment(
         use_precomputed_kernel_params=use_precomputed_kernel_params,
         use_function_norms=use_function_norms,
         num_offline_data=num_offline_data,
+        wandb_notes=wandb_notes  # Add to config for visibility
     )
     key = jr.PRNGKey(seed)
 
@@ -112,6 +113,7 @@ def experiment(
         }
         if wandb_notes:
             wandb_kwargs['notes'] = wandb_notes
+            wandb_kwargs['tags'] = [wandb_notes]  # Also add as tags for easier filtering
         
         # Only set dir if not on cluster to avoid permission issues  
         if not logs_dir or not logs_dir.startswith('/cluster/scratch/'):
