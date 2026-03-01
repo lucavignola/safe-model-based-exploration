@@ -48,8 +48,8 @@ def main(args=None):
     print(f"Generating {len(all_combinations)} parameter combinations...")
     
     for flags in all_combinations:
-        # Use experiment.experiment function directly
-        cmd = generate_base_command(experiment.experiment, flags=flags)
+        # Use experiment module directly (not the function)
+        cmd = generate_base_command(experiment, flags=flags)
         command_list.append(cmd)
     
     # Launch on Euler with RTX 4090
