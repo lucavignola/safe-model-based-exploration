@@ -6,6 +6,25 @@ PROJECT_NAME = 'PendulumGP'
 ENTITY = 'lvignola-eth-z-rich'
 NUM_GPUS = 1
 
+# Hardware configurations matching working Hydra setup
+HARDWARE_CONFIGS = {
+    '4090_rtx': {
+        'gpu_type': 'rtx_4090',
+        'cpus_per_task': 10,
+        'timeout_min': 60
+    },
+    'rtx_a6000': {
+        'gpu_type': 'rtxa6000', 
+        'cpus_per_task': 8,
+        'timeout_min': 120
+    },
+    'cpu_only': {
+        'gpu_type': None,
+        'cpus_per_task': 4,
+        'timeout_min': 240
+    }
+}
+
 _applicable_configs = {
     'env_margin_factor': [10],
     'reward_source': ['gym'],
@@ -36,6 +55,9 @@ _applicable_configs_opax = {'alg_name': ['OPAX'], 'use_optimism': [1], 'use_pess
 _applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pessimism': [1],
                              'num_particles': [30],
                              'beta': [3.0],
+                             'lambda_sigma': [0,1000],
+                             'uncertainty_eps': [300],
+                             'default_task_index': [1],
                              } \
                             | _applicable_configs
 
@@ -93,26 +115,39 @@ def main(args):
 
     for flags in all_flags_combinations:
         flags['logs_dir'] = logs_dir
+        # Add wandb notes if specified
+        if args.wandb_notes:
+            flags['wandb_notes'] = args.wandb_notes
         cmd = generate_base_command(experiment, flags=flags)
         command_list.append(cmd)
 
-    # submit jobs
-    num_hours = 23 if args.long_run else 3
+    # submit jobs - using exact working Hydra configuration
+    hw_config = HARDWARE_CONFIGS.get(args.hardware, HARDWARE_CONFIGS['4090_rtx'])
+    duration_hours = hw_config['timeout_min'] // 60 if not args.long_run else 23
+    duration_mins = hw_config['timeout_min'] % 60 if not args.long_run else 59
+    
     generate_run_commands(command_list,
-                          num_cpus=args.num_cpus,
-                          num_gpus=NUM_GPUS,
+                          num_cpus=hw_config['cpus_per_task'],
+                          num_gpus=NUM_GPUS if hw_config['gpu_type'] is not None else 0,
                           mode=args.mode,
-                          duration=f'{num_hours}:59:00',
+                          duration=f'{duration_hours}:{duration_mins:02d}:00',
                           prompt=True,
-                          mem=16000)
+                          gpu_type=hw_config['gpu_type']
+                          )
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--num_cpus', type=int, default=1, help='number of cpus to use')
-    parser.add_argument('--num_gpus', type=int, default=1, help='number of gpus to use')
     parser.add_argument('--mode', type=str, default='euler', help='how to launch the experiments')
     parser.add_argument('--long_run', default=False, action="store_true")
+    parser.add_argument('--hardware', type=str, default='4090_rtx', 
+                       choices=['4090_rtx', 'rtx_a6000', 'cpu_only'],
+                       help='hardware configuration (similar to Hydra +hardware=4090_rtx)')
+    parser.add_argument('--wandb_notes', type=str, default=None,
+                       help='wandb notes for grouping runs (e.g. Mar01-pendulum_sbsrl)')
+
+    args = parser.parse_args()
+    main(args)
 
     args = parser.parse_args()
     main(args)

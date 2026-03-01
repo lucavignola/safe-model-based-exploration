@@ -9,7 +9,7 @@ from bsm.utils import Data
 def experiment(
         project_name: str = 'ActSafeTest',
         alg_name: str = 'ActSafe',
-        entity_name: str = 'sukhijab',
+        entity_name: str = 'lvignola-eth-z-rich',
         exp_hash: str = '42',
         seed: int = 0,
         num_particles: int = 10,
@@ -35,6 +35,7 @@ def experiment(
         use_function_norms: bool = False,
         num_offline_data: int = 10,
         violation_eps: float = 0.1,
+        wandb_notes: str = None,
 ):
     if num_gpus == 0:
         import os
@@ -93,11 +94,15 @@ def experiment(
     num_training_steps = constant_schedule(num_training_steps)
 
     if log_wandb:
-        wandb.init(project=project_name,
-                   config=configs,
-                   dir='/cluster/scratch/' + entity_name,
-                   entity=entity_name,
-                   )
+        wandb_kwargs = {
+            'project': project_name,
+            'config': configs,
+            'dir': '/cluster/scratch/lvignola',
+            'entity': entity_name,
+        }
+        if wandb_notes:
+            wandb_kwargs['notes'] = wandb_notes
+        wandb.init(**wandb_kwargs)
 
     class RacCarOfflineData(OfflineData):
         def __init__(self, *args, **kwargs):
@@ -351,6 +356,7 @@ def main(args):
         use_function_norms=bool(args.use_function_norms),
         num_offline_data=args.num_offline_data,
         violation_eps=args.violation_eps,
+        wandb_notes=args.wandb_notes,
     )
 
 
@@ -361,7 +367,7 @@ if __name__ == '__main__':
     parser.add_argument('--logs_dir', type=str, default='logs')
     parser.add_argument('--project_name', type=str, default='ActSafeTest')
     parser.add_argument('--alg_name', type=str, default='ActSafe')
-    parser.add_argument('--entity_name', type=str, default='sukhijab')
+    parser.add_argument('--entity_name', type=str, default='lvignola-eth-z-rich')
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)
     parser.add_argument('--alpha', type=float, default=0.2)
@@ -384,6 +390,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_function_norms', type=int, default=0)
     parser.add_argument('--num_offline_data', type=int, default=10)
     parser.add_argument('--violation_eps', type=float, default=0.5)
+    parser.add_argument('--wandb_notes', type=str, default=None)
 
     parser.add_argument('--seed', type=int, default=1)
 

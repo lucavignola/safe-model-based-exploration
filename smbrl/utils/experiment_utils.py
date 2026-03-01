@@ -139,15 +139,18 @@ def generate_run_commands(command_list: List[str], output_file_list: Optional[Li
         cluster_cmds = []
         bsub_cmd = 'sbatch ' + \
                    f'--time={duration} ' + \
-                   f'--mem-per-cpu={mem} ' + \
-                   f'--cpus-per-task {num_cpus} ' \
-                   + '--account=ls_krausea '
+                   '--mem-per-cpu=10240 ' + \
+                   f'--cpus-per-task={num_cpus} ' + \
+                   '--tasks-per-node=1 ' + \
+                   '--account=ls_krausea ' + \
+                   '--job-name=smbrl_exp ' + \
+                   '--requeue '
 
+        # GPU configuration matching the working Hydra setup
         if num_gpus > 0:
             if gpu_type is None:
-                bsub_cmd += f'-G {num_gpus} --gres=gpumem:10240m '
-            else:
-                bsub_cmd += f'--gpus={gpu_type}:{num_gpus} '
+                gpu_type = 'rtx_4090'  # Default to RTX 4090 as in working config
+            bsub_cmd += f'--gpus={gpu_type}:{num_gpus} '
 
         assert output_file_list is None or len(command_list) == len(output_file_list)
         if output_file_list is None:

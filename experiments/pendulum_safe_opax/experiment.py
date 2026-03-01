@@ -1,4 +1,4 @@
-ENTITY = 'trevenl'
+ENTITY = 'lvignola-eth-z-rich'
 
 
 def experiment(project_name: str,
@@ -107,7 +107,7 @@ def experiment(project_name: str,
 
     wandb.init(
         project=project_name,
-        dir='/cluster/scratch/' + ENTITY,
+        dir='/cluster/scratch/lvignola',
         config=config,
     )
 

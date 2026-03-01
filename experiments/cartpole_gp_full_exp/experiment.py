@@ -9,7 +9,7 @@ from smbrl.utils.experiment_utils import Logger, hash_dict
 def experiment(
         project_name: str = 'ActSafeTest',
         alg_name: str = 'ActSafe',
-        entity_name: str = 'sukhijab',
+        entity_name: str = 'lvignola-eth-z-rich',
         exp_hash: str = '42',
         seed: int = 0,
         num_particles: int = 10,
@@ -39,6 +39,7 @@ def experiment(
         lambda_sigma: float = 1.0,
         uncertainty_eps: float = 1.0,
         default_task_index: int = 0,
+        wandb_notes: str = None,
 ):
     if num_gpus == 0:
         import os
@@ -287,11 +288,15 @@ def experiment(
                                            outputs=jnp.array([[0., 0., 0., 0., 0.]]))
 
     if log_wandb:
-        wandb.init(project=project_name,
-                   config=configs,
-                   dir='/cluster/scratch/lvignola',
-                   entity=entity_name,
-                   )
+        wandb_init_kwargs = {
+            'project': project_name,
+            'config': configs,
+            'dir': '/cluster/scratch/lvignola',
+            'entity': entity_name,
+        }
+        if wandb_notes:
+            wandb_init_kwargs['notes'] = wandb_notes
+        wandb.init(**wandb_init_kwargs)
     agent.run_episodes(num_episodes=10,
                        key=key,
                        model_state=model_state,
@@ -355,6 +360,7 @@ def main(args):
         lambda_sigma=args.lambda_sigma,
         uncertainty_eps=args.uncertainty_eps,
         default_task_index=args.default_task_index,
+        wandb_notes=args.wandb_notes,
     )
 
 
@@ -365,7 +371,7 @@ if __name__ == '__main__':
     parser.add_argument('--logs_dir', type=str, default='logs')
     parser.add_argument('--project_name', type=str, default='ActSafeTest')
     parser.add_argument('--alg_name', type=str, default='ActSafe')
-    parser.add_argument('--entity_name', type=str, default='sukhijab')
+    parser.add_argument('--entity_name', type=str, default='lvignola-eth-z-rich')
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)
     parser.add_argument('--alpha', type=float, default=0.2)
@@ -394,6 +400,7 @@ if __name__ == '__main__':
     parser.add_argument('--lambda_sigma', type=float, default=1.0)
     parser.add_argument('--uncertainty_eps', type=float, default=1.0)
     parser.add_argument('--default_task_index', type=int, default=0)
+    parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
 
     parser.add_argument('--seed', type=int, default=0)
 
