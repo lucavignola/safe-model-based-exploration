@@ -144,6 +144,7 @@ def generate_run_commands(command_list: List[str], output_file_list: Optional[Li
                    '--tasks-per-node=1 ' + \
                    '--account=ls_krausea ' + \
                    '--job-name=smbrl_exp ' + \
+                   '--partition=gpuhe.24h ' + \
                    '--requeue '
 
         # GPU configuration matching the working Hydra setup
