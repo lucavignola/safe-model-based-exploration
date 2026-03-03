@@ -14,7 +14,7 @@ HARDWARE_CONFIGS = {
         'timeout_min': 180  # Increased from 60 to 180 min (3h)
     },
     'rtx_a6000': {
-        'gpu_type': 'rtxa6000', 
+        'gpu_type': 'rtxa6000',
         'cpus_per_task': 8,
         'timeout_min': 180  # Increased from 120 to 180 min for consistency
     },
@@ -40,20 +40,21 @@ _applicable_configs = {
     'num_offline_data': [0]
 }
 
+num_particles = [10]
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1],
-                               'num_particles': [30],
+                               'num_particles': num_particles,
                                'beta': [3.0],
                                } \
                               | _applicable_configs
 
 _applicable_configs_opax = {'alg_name': ['OPAX'], 'use_optimism': [1], 'use_pessimism': [1],
-                            'num_particles': [30],
+                            'num_particles': num_particles,
                             'beta': [3.0],
                             } \
                            | _applicable_configs
 
 _applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pessimism': [1],
-                             'num_particles': [30],
+                             'num_particles': num_particles+[1],
                              'beta': [3.0],
                              'lambda_sigma': [0,1000],
                              'uncertainty_eps': [300],
@@ -74,13 +75,13 @@ _applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pe
 #                                            | _applicable_configs
 #
 _applicable_configs_safehucrl = {'alg_name': ['SafeHUCRL'], 'use_optimism': [1], 'use_pessimism': [1],
-                                 'num_particles': [30],
+                                 'num_particles': num_particles,
                                  'beta': [3.0],
                                  } \
                                 | _applicable_configs
 
 _applicable_configs_hucrl = {'alg_name': ['HUCRL'], 'use_optimism': [1], 'use_pessimism': [1],
-                             'num_particles': [30],
+                             'num_particles': num_particles,
                              'beta': [3.0],
                              } \
                             | _applicable_configs
@@ -125,7 +126,7 @@ def main(args):
     hw_config = HARDWARE_CONFIGS.get(args.hardware, HARDWARE_CONFIGS['4090_rtx'])
     duration_hours = hw_config['timeout_min'] // 60 if not args.long_run else 23
     duration_mins = hw_config['timeout_min'] % 60 if not args.long_run else 59
-    
+
     generate_run_commands(command_list,
                           num_cpus=hw_config['cpus_per_task'],
                           num_gpus=NUM_GPUS if hw_config['gpu_type'] is not None else 0,
@@ -140,7 +141,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', type=str, default='euler', help='how to launch the experiments')
     parser.add_argument('--long_run', default=False, action="store_true")
-    parser.add_argument('--hardware', type=str, default='4090_rtx', 
+    parser.add_argument('--hardware', type=str, default='4090_rtx',
                        choices=['4090_rtx', 'rtx_a6000', 'cpu_only'],
                        help='hardware configuration (similar to Hydra +hardware=4090_rtx)')
     parser.add_argument('--wandb_notes', type=str, default=None,
