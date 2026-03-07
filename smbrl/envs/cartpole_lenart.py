@@ -205,20 +205,206 @@ class CartPoleOfflineData:
         return Data(inputs=inputs, outputs=outputs)
 
 
+class CartPoleTrajectoryOfflineData:
+    """
+    Alternative offline data generation that samples contiguous trajectories
+    instead of uniform grid points, providing more realistic temporal structure.
+    """
+    def __init__(self,
+                 action_repeat: int,
+                 predict_difference: bool = True):
+        self.env = CartPoleEnv()
+        self.action_repeat = action_repeat
+        self.predict_difference = predict_difference
+
+    def _is_state_in_bounds(self, obs, bounds):
+        """Check if observation is within specified bounds"""
+        state = self.env.from_obs_to_state(obs)
+        pos, angle, lin_vel, ang_vel = state[0], state[1], state[2], state[3]
+
+        return (jnp.abs(pos) <= bounds['max_abs_lin_position'] and
+                jnp.abs(angle) <= bounds['max_abs_angle'] and
+                jnp.abs(lin_vel) <= bounds['max_abs_lin_velocity'] and
+                jnp.abs(ang_vel) <= bounds['max_abs_ang_velocity'])
+
+    def dynamics_fn(self, z: Float[Array, '6']):
+        """Same dynamics function as original for compatibility"""
+        obs, action = z[:self.env.observation_size], z[self.env.observation_size:]
+        state = State(pipeline_state=None,
+                      obs=obs,
+                      reward=jnp.array(0.0),
+                      done=jnp.array(0.0), )
+        for _ in range(self.action_repeat):
+            state = self.env.step(state, action)
+        return state.obs - obs
+
+    def sample_trajectory(self,
+                         key: Float[Array, '2'],
+                         trajectory_length: int = 50,
+                         max_abs_lin_position: float = 0.5,
+                         max_abs_angle: float = jnp.pi,
+                         max_abs_lin_velocity: float = 1.0,
+                         max_abs_ang_velocity: float = 4.0,
+                         max_abs_action: float = 1.0,
+                         use_env_reset: bool = True,
+                         init_noise_std: float = 0.0,
+                         ) -> Data:
+        """
+        Sample a single contiguous trajectory with random actions
+
+        Args:
+            use_env_reset: If True, use env.reset() for initial state (consistent with online)
+            init_noise_std: If >0, add Gaussian noise to initial state for diversity
+        """
+
+        bounds = {
+            'max_abs_lin_position': max_abs_lin_position,
+            'max_abs_angle': max_abs_angle,
+            'max_abs_lin_velocity': max_abs_lin_velocity,
+            'max_abs_ang_velocity': max_abs_ang_velocity
+        }
+
+        key_init, key_noise, key_actions = jr.split(key, 3)
+
+        if use_env_reset:
+            # Use same initial state as online episodes for consistency
+            reset_state = self.env.reset(key_init)
+            init_obs = reset_state.obs
+
+        else:
+            # Original random sampling approach (for comparison)
+            key_lin_pos, key_ang, key_lin_vel, key_ang_vel = jr.split(key_init, 4)
+
+            init_pos = jr.uniform(key_lin_pos, minval=-max_abs_lin_position*0.8, maxval=max_abs_lin_position*0.8)
+            init_ang = jr.uniform(key_ang, minval=-max_abs_angle*0.8, maxval=max_abs_angle*0.8)
+            init_lin_vel = jr.uniform(key_lin_vel, minval=-max_abs_lin_velocity*0.5, maxval=max_abs_lin_velocity*0.5)
+            init_ang_vel = jr.uniform(key_ang_vel, minval=-max_abs_ang_velocity*0.5, maxval=max_abs_ang_velocity*0.5)
+
+            init_obs = self.env.from_state_to_obs(jnp.array([init_pos, init_ang, init_lin_vel, init_ang_vel]))
+
+        # Initialize state
+        state = State(pipeline_state=None, obs=init_obs, reward=jnp.array(0.0), done=jnp.array(0.0))
+
+        # Sample random actions for trajectory - ensure each trajectory has different actions
+        action_keys = jr.split(key_actions, trajectory_length)
+        actions = vmap(lambda k: jr.uniform(k, minval=-max_abs_action, maxval=max_abs_action, shape=(1,)))(action_keys)
+
+        # Roll out trajectory
+        states_list = []
+        actions_list = []
+
+        for i in range(trajectory_length):
+            action = actions[i]
+            current_obs = state.obs
+
+            # Check bounds before stepping
+            if self._is_state_in_bounds(current_obs, bounds):
+                states_list.append(current_obs)
+                actions_list.append(action)
+
+                # Step environment
+                for _ in range(self.action_repeat):
+                    state = self.env.step(state, action)
+            else:
+                # Stop if we go out of bounds
+                break
+
+        if len(states_list) == 0:
+            # Fallback to single transition if trajectory too short
+            states_list = [init_obs]
+            actions_list = [actions[0]]
+
+        # Convert to arrays and create input/output pairs
+        trajectory_obs = jnp.array(states_list)
+        trajectory_actions = jnp.array(actions_list).squeeze(-1)
+
+        # Create inputs (obs + action)
+        inputs = jnp.concatenate([trajectory_obs, trajectory_actions[:, None]], axis=-1)
+
+        # Compute outputs using dynamics function
+        outputs = vmap(self.dynamics_fn)(inputs)
+
+        return Data(inputs=inputs, outputs=outputs)
+
+    def sample(self,
+               key: Float[Array, '2'],
+               num_samples: int = 1,
+               max_abs_lin_position: float = 0.5,
+               max_abs_angle: float = jnp.pi,
+               max_abs_lin_velocity: float = 1.0,
+               max_abs_ang_velocity: float = 4.0,
+               max_abs_action: float = 1.0,
+               num_trajectories: int = None,
+               trajectory_length: int = 50,
+               use_env_reset: bool = True,
+               init_noise_std: float = 0.0,
+               ) -> Data:
+        """
+        Sample offline data using contiguous trajectories.
+
+        Args:
+            num_samples: Total number of transitions to collect
+            num_trajectories: Number of trajectories to sample (if None, auto-computed)
+            trajectory_length: Length of each trajectory
+            use_env_reset: If True, use env.reset() for initial states (consistent with online)
+            init_noise_std: If >0, add Gaussian noise to initial state for diversity
+        """
+
+        if num_trajectories is None:
+            num_trajectories = max(1, num_samples // trajectory_length)
+
+        keys = jr.split(key, num_trajectories)
+
+        # Sample multiple trajectories
+        all_inputs = []
+        all_outputs = []
+
+        for traj_key in keys:
+            traj_data = self.sample_trajectory(
+                traj_key,
+                trajectory_length=trajectory_length,
+                max_abs_lin_position=max_abs_lin_position,
+                max_abs_angle=max_abs_angle,
+                max_abs_lin_velocity=max_abs_lin_velocity,
+                max_abs_ang_velocity=max_abs_ang_velocity,
+                max_abs_action=max_abs_action,
+                use_env_reset=use_env_reset,
+                init_noise_std=init_noise_std,
+            )
+            all_inputs.append(traj_data.inputs)
+            all_outputs.append(traj_data.outputs)
+
+        # Concatenate all trajectory data
+        if all_inputs:
+            combined_inputs = jnp.concatenate(all_inputs, axis=0)
+            combined_outputs = jnp.concatenate(all_outputs, axis=0)
+
+            # Trim to requested number of samples
+            if combined_inputs.shape[0] > num_samples:
+                combined_inputs = combined_inputs[:num_samples]
+                combined_outputs = combined_outputs[:num_samples]
+
+            return Data(inputs=combined_inputs, outputs=combined_outputs)
+        else:
+            # Fallback to empty data
+            empty_input = jnp.zeros((0, self.env.observation_size + self.env.action_size))
+            empty_output = jnp.zeros((0, self.env.observation_size))
+            return Data(inputs=empty_input, outputs=empty_output)
+
+
 if __name__ == '__main__':
     from jax import jit
     import matplotlib.pyplot as plt
 
     jax.config.update("jax_enable_x64", True)
 
+    # Test environment simulation
     env = CartPoleEnv(init_angle=jnp.pi)
-
     state = env.reset(jr.PRNGKey(0))
     action = jnp.array([0.0, ])
 
     obs = []
     rewards = []
-    # step_fn = env.step
     step_fn = jit(env.step)
     for i in range(100):
         state = step_fn(state, action)
@@ -226,7 +412,159 @@ if __name__ == '__main__':
         rewards.append(state.reward)
 
     obs = jnp.array(obs)
+
+    # Create figure for environment simulation
+    plt.figure(figsize=(15, 10))
+
+    plt.subplot(2, 3, 1)
     for i in range(env.observation_size):
         plt.plot(obs[:, i], label=f'State {i}')
     plt.legend()
+    plt.title('Environment Simulation (Zero Actions)')
+    plt.xlabel('Time Step')
+    plt.ylabel('State Value')
+
+    # Compare offline data collection methods
+    print("Comparing offline data collection methods...")
+
+    # Parameters for comparison
+    num_samples = 200  # Total samples to collect
+    action_repeat = 2
+    key = jr.PRNGKey(42)
+    key1, key2 = jr.split(key)
+
+    # Original uniform sampling
+    print("Generating uniform grid samples...")
+    uniform_sampler = CartPoleOfflineData(action_repeat=action_repeat)
+    uniform_data = uniform_sampler.sample(
+        key=key1,
+        num_samples=20,
+        max_abs_lin_position=0.5,
+        max_abs_angle=jnp.pi,
+        max_abs_lin_velocity=1.0,
+        max_abs_ang_velocity=4.0,
+        max_abs_action=1.0
+    )
+
+    # New trajectory-based sampling
+    print("Generating trajectory-based samples...")
+    trajectory_sampler = CartPoleTrajectoryOfflineData(action_repeat=action_repeat)
+    trajectory_data = trajectory_sampler.sample(
+        key=key2,
+        num_samples=num_samples,
+        num_trajectories=2,  # 5 trajectories to check diversity
+        trajectory_length=50,  # Longer trajectories
+        use_env_reset=True,
+        init_noise_std=0.0,  # No initial noise - OK if same start state
+        max_abs_lin_position=0.5,
+        max_abs_angle=jnp.pi,
+        max_abs_lin_velocity=1.0,
+        max_abs_ang_velocity=4.0,
+        max_abs_action=1.0
+    )
+
+    # Verify action diversity between trajectories
+    print("\n=== ACTION DIVERSITY CHECK ===")
+    traj_actions_all = trajectory_data.inputs[:, -1]  # Extract all actions
+    samples_per_traj = len(traj_actions_all) // 5  # Assuming 5 trajectories
+
+    for i in range(5):  # Check each trajectory
+        start_idx = i * samples_per_traj
+        end_idx = start_idx + min(5, samples_per_traj)  # First 5 actions of each trajectory
+        if end_idx <= len(traj_actions_all):
+            actions_slice = traj_actions_all[start_idx:end_idx]
+            print(f"  Trajectory {i+1} - First 5 actions: [{', '.join([f'{a:.3f}' for a in actions_slice])}]")
+
+    print(f"\nUniform samples collected: {uniform_data.inputs.shape[0]}")
+    print(f"Trajectory samples collected: {trajectory_data.inputs.shape[0]}")
+
+    # Extract state components for visualization
+    # Uniform data states (from inputs, excluding action)
+    uniform_states = uniform_data.inputs[:, :-1]  # Remove last column (action)
+    uniform_pos = uniform_states[:, 0]
+    uniform_cos = uniform_states[:, 1]
+    uniform_sin = uniform_states[:, 2]
+    uniform_lin_vel = uniform_states[:, 3]
+    uniform_ang_vel = uniform_states[:, 4]
+    uniform_actions = uniform_data.inputs[:, -1]
+
+    # Trajectory data states
+    traj_states = trajectory_data.inputs[:, :-1]
+    traj_pos = traj_states[:, 0]
+    traj_cos = traj_states[:, 1]
+    traj_sin = traj_states[:, 2]
+    traj_lin_vel = traj_states[:, 3]
+    traj_ang_vel = traj_states[:, 4]
+    traj_actions = trajectory_data.inputs[:, -1]
+
+    # Convert cos/sin back to angles for plotting
+    uniform_angles = jnp.arctan2(uniform_sin, uniform_cos)
+    traj_angles = jnp.arctan2(traj_sin, traj_cos)
+
+    # Plot comparisons
+    plt.subplot(2, 3, 2)
+    plt.scatter(uniform_pos, uniform_angles, alpha=0.6, s=20, label='Uniform Grid', color='red')
+    plt.scatter(traj_pos, traj_angles, alpha=0.6, s=20, label='Trajectories', color='blue')
+    plt.xlabel('Position')
+    plt.ylabel('Angle (rad)')
+    plt.title('Position vs Angle Distribution')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    plt.subplot(2, 3, 3)
+    plt.scatter(uniform_lin_vel, uniform_ang_vel, alpha=0.6, s=20, label='Uniform Grid', color='red')
+    plt.scatter(traj_lin_vel, traj_ang_vel, alpha=0.6, s=20, label='Trajectories', color='blue')
+    plt.xlabel('Linear Velocity')
+    plt.ylabel('Angular Velocity')
+    plt.title('Velocity Distribution')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    plt.subplot(2, 3, 4)
+    plt.hist(uniform_actions, bins=30, alpha=0.7, label='Uniform Grid', color='red', density=True)
+    plt.hist(traj_actions, bins=30, alpha=0.7, label='Trajectories', color='blue', density=True)
+    plt.xlabel('Action')
+    plt.ylabel('Density')
+    plt.title('Action Distribution')
+    plt.legend()
+
+    # Plot temporal structure for trajectory data (first 50 samples)
+    n_plot = min(50, trajectory_data.inputs.shape[0])
+    plt.subplot(2, 3, 5)
+    plt.plot(traj_pos[:n_plot], 'b-', linewidth=2, label='Position')
+    plt.plot(traj_angles[:n_plot], 'g-', linewidth=2, label='Angle')
+    plt.plot(traj_actions[:n_plot], 'r--', alpha=0.7, label='Actions')
+    plt.xlabel('Trajectory Step')
+    plt.ylabel('Value')
+    plt.title('Trajectory Temporal Structure')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    # Compare dynamics prediction differences
+    plt.subplot(2, 3, 6)
+    uniform_delta_pos = uniform_data.outputs[:, 0]  # Position change
+    traj_delta_pos = trajectory_data.outputs[:, 0]
+
+    plt.hist(uniform_delta_pos, bins=30, alpha=0.7, label='Uniform Grid', color='red', density=True)
+    plt.hist(traj_delta_pos, bins=30, alpha=0.7, label='Trajectories', color='blue', density=True)
+    plt.xlabel('Position Change (Δpos)')
+    plt.ylabel('Density')
+    plt.title('Dynamics Output Distribution')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.suptitle('Offline Data Collection Comparison: Uniform Grid vs Trajectories', y=1.02)
     plt.show()
+
+    # Print statistics
+    print("\n=== DATA COLLECTION STATISTICS ===")
+    print(f"Total samples - Uniform: {len(uniform_data.inputs)}, Trajectory: {len(trajectory_data.inputs)}")
+    print(f"\nPosition range:")
+    print(f"  Uniform: [{uniform_pos.min():.3f}, {uniform_pos.max():.3f}]")
+    print(f"  Trajectory: [{traj_pos.min():.3f}, {traj_pos.max():.3f}]")
+    print(f"\nAngle range:")
+    print(f"  Uniform: [{uniform_angles.min():.3f}, {uniform_angles.max():.3f}]")
+    print(f"  Trajectory: [{traj_angles.min():.3f}, {traj_angles.max():.3f}]")
+    print(f"\nAction statistics:")
+    print(f"  Uniform - mean: {uniform_actions.mean():.3f}, std: {uniform_actions.std():.3f}")
+    print(f"  Trajectory - mean: {traj_actions.mean():.3f}, std: {traj_actions.std():.3f}")

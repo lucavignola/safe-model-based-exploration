@@ -40,6 +40,7 @@ def experiment(
         uncertainty_eps: float = 1.0,
         default_task_index: int = 0,
         wandb_notes: str = None,
+        num_traj: int = 0,
 ):
     if num_gpus == 0:
         import os
@@ -57,7 +58,7 @@ def experiment(
     from optax import constant_schedule
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
-    from smbrl.envs.cartpole_lenart import CartPoleEnv, CartPoleOfflineData
+    from smbrl.envs.cartpole_lenart import CartPoleEnv, CartPoleOfflineData, CartPoleTrajectoryOfflineData
     from smbrl.playground.cartpole_icem import PositionBoundBinary
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
@@ -125,15 +126,26 @@ def experiment(
     key = jr.PRNGKey(seed)
     key, key_offline_data = jr.split(key)
 
-    offline_data_sampler = CartPoleOfflineData(action_repeat=action_repeat,
-                                               predict_difference=True)
-
-    offline_data = offline_data_sampler.sample(key=key_offline_data,
-                                               num_samples=num_offline_data,
-                                               max_abs_lin_position=1.0,
-                                               max_abs_ang_velocity=5.0,
-                                               max_abs_lin_velocity=5.0,
-                                               )
+    # Choose data collection method based on num_traj parameter
+    if num_traj == 0:
+        # Use original uniform grid data collection
+        offline_data_sampler = CartPoleOfflineData(action_repeat=action_repeat,
+                                                   predict_difference=True)
+        offline_data = offline_data_sampler.sample(key=key_offline_data,
+                                                   num_samples=num_offline_data,
+                                                   max_abs_lin_position=1.0,
+                                                   max_abs_ang_velocity=5.0,
+                                                   max_abs_lin_velocity=5.0,
+                                                   )
+    else:
+        # Use trajectory-based data collection
+        offline_data_traj = CartPoleTrajectoryOfflineData(action_repeat=1)
+        offline_data = offline_data_traj.sample(
+            key,
+            num_samples=500,
+            num_trajectories=num_traj,
+            trajectory_length=50
+        )
 
     env = CartPoleEnv()
 
@@ -265,7 +277,7 @@ def experiment(
         'use_optimism': use_optimism,
         'optimizer': optimizer,
     }
-    
+
     # Add SBSRL-specific parameters if needed
     if alg_name == 'SBSRL':
         agent_kwargs.update({
@@ -273,7 +285,7 @@ def experiment(
             'uncertainty_eps': uncertainty_eps,
             'default_task_index': default_task_index,
         })
-    
+
     agent = alg(**agent_kwargs)
 
     model_state = model.init(jr.PRNGKey(seed))
@@ -290,7 +302,7 @@ def experiment(
 
     if log_wandb:
         import wandb
-        
+
         # Setup wandb environment for Euler if needed
         if logs_dir.startswith('/cluster/scratch/'):
             import os
@@ -298,7 +310,7 @@ def experiment(
                 os.environ['WANDB_CACHE_DIR'] = '/cluster/scratch/lvignola/wandb'
                 os.environ['WANDB_CONFIG_DIR'] = '/cluster/scratch/lvignola/wandb/config'
                 os.environ['WANDB_DATA_DIR'] = '/cluster/scratch/lvignola/wandb/data'
-        
+
         wandb_kwargs = {
             'project': project_name,
             'entity': entity_name,
@@ -308,11 +320,11 @@ def experiment(
         if wandb_notes:
             wandb_kwargs['notes'] = wandb_notes
             wandb_kwargs['tags'] = [wandb_notes]  # Also add as tags for easier filtering
-        
+
         # Only set dir if not on cluster to avoid permission issues
         if not logs_dir.startswith('/cluster/scratch/'):
             wandb_kwargs['dir'] = logs_dir
-            
+
         wandb.init(**wandb_kwargs)
     agent.run_episodes(num_episodes=10,
                        key=key,
@@ -378,6 +390,7 @@ def main(args):
         uncertainty_eps=args.uncertainty_eps,
         default_task_index=args.default_task_index,
         wandb_notes=args.wandb_notes,
+        num_traj=args.num_traj,
     )
 
 
@@ -395,7 +408,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', type=int, default=5)
     parser.add_argument('--exponent', type=float, default=1.0)
     parser.add_argument('--lambda_constraint', type=float, default=1e8)
-    parser.add_argument('--icem_horizon', type=int, default=50)
+    parser.add_argument('--icem_horizon', type=int, default=20)
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
     parser.add_argument('--max_position', type=float, default=1.5)
@@ -405,19 +418,20 @@ if __name__ == '__main__':
     parser.add_argument('--log_wandb', type=int, default=1)
     parser.add_argument('--num_gpus', type=int, default=0)
     parser.add_argument('--function_norm', type=float, default=1.0)
-    parser.add_argument('--num_elites', type=int, default=50)
+    parser.add_argument('--num_elites', type=int, default=20)
     parser.add_argument('--beta', type=float, default=2.0)
     parser.add_argument('--use_precomputed_kernel_params', type=int, default=0)
     parser.add_argument('--use_function_norms', type=int, default=0)
-    parser.add_argument('--num_offline_data', type=int, default=50)
+    parser.add_argument('--num_offline_data', type=int, default=10)
     parser.add_argument('--violation_eps', type=float, default=0.1)
     parser.add_argument('--optimizer', type=str, default='icem')
-    
+
     # SBSRL-specific parameters
-    parser.add_argument('--lambda_sigma', type=float, default=1.0)
-    parser.add_argument('--uncertainty_eps', type=float, default=1.0)
-    parser.add_argument('--default_task_index', type=int, default=0)
+    parser.add_argument('--lambda_sigma', type=float, default=1)
+    parser.add_argument('--uncertainty_eps', type=float, default=300)
+    parser.add_argument('--default_task_index', type=int, default=1)
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
+    parser.add_argument('--num_traj', type=int, default=2, help='Number of trajectories for trajectory-based data collection. 0=use uniform grid sampling')
 
     parser.add_argument('--seed', type=int, default=0)
 

@@ -31,7 +31,7 @@ HARDWARE_CONFIGS = {
 
 _applicable_configs = {
     "project_name": [PROJECT_NAME],
-    "num_training_steps": [2_000],
+    "num_training_steps": [800],
     "episode_length": [50],
     "action_repeat": [2],
     "seed": list(range(5)),
@@ -42,17 +42,18 @@ _applicable_configs = {
         0,
     ],
     "use_function_norms": [0],
-    "num_offline_data": [0, 10],
+    "num_offline_data": [0, 10, 20],
     "max_position": [1.5],
     "num_samples": [1000],
     "icem_horizon": [
-        30,
+        20,
     ],
-    "num_elites": [100],
+    "num_elites": [20],
     "num_steps": [5],
-    "violation_eps": [0.0],  # [0.0, 0.25, 0.5],
+    "violation_eps": [0.0, 0.25, 0.5],
+    "num_traj": [0],  # 0=uniform grid sampling, >0=trajectory-based sampling
 }
-num_particles = [10]
+num_particles = [15]
 _applicable_configs_actsafe = {
     "alg_name": ["ActSafe"],
     "use_optimism": [1],
@@ -79,7 +80,7 @@ _applicable_configs_sbsrl = {
     "use_optimism": [1],
     "use_pessimism": [1],
     "num_particles": num_particles + [1],
-    "lambda_sigma": [0, 100],
+    "lambda_sigma": [0],
     "uncertainty_eps": [300],
     "default_task_index": [1],
 } | _applicable_configs
