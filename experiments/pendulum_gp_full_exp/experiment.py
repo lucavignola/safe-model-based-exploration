@@ -34,6 +34,7 @@ def experiment(
         num_gpus: int = 0,
         function_norm: float = 1.0,
         num_elites: int = 50,
+        violation_eps: float = 0.1,
         beta: float = 3.0,
         lambda_sigma: float = 1.0,
         uncertainty_eps: float = 1.0,
@@ -41,7 +42,6 @@ def experiment(
         default_task_index: int = 0,
         wandb_notes: str = None,
 ):
-    violation_eps = 0.1
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
@@ -342,6 +342,7 @@ def main(args):
         exp_hash=exp_hash,
         function_norm=args.function_norm,
         num_elites=args.num_elites,
+        violation_eps=args.violation_eps,
         beta=args.beta,
         lambda_sigma=args.lambda_sigma,
         uncertainty_eps=args.uncertainty_eps,
@@ -379,6 +380,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_gpus', type=int, default=0)
     parser.add_argument('--function_norm', type=float, default=1.0)
     parser.add_argument('--num_elites', type=int, default=100)
+    parser.add_argument('--violation_eps', type=float, default=0.1)
     parser.add_argument('--beta', type=float, default=3.0)
 
     # SBSRL-specific parameters
