@@ -35,12 +35,12 @@ def experiment(
         function_norm: float = 1.0,
         num_elites: int = 50,
         beta: float = 3.0,
-        lambda_sigma: float = 1.0,
+        lambda_sigma: float = 0.0,
         uncertainty_eps: float = 1.0,
         default_task_index: int = 0,
         wandb_notes: str = None,
+        violation_eps: float = 1,
 ):
-    violation_eps = 0.1
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
@@ -213,7 +213,7 @@ def experiment(
         'action_repeat': action_repeat,
         'cost_fn': cost_fn,
         'test_tasks': [
-            Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
+            #Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
             Task(reward=PendulumReward(), name='Swing up', env=env),
         ],
         'predict_difference': True,
@@ -343,6 +343,8 @@ def main(args):
         lambda_sigma=args.lambda_sigma,
         uncertainty_eps=args.uncertainty_eps,
         default_task_index=args.default_task_index,
+        wandb_notes=args.wandb_notes,
+        violation_eps=args.violation_eps,
     )
 
 
@@ -375,13 +377,12 @@ if __name__ == '__main__':
     parser.add_argument('--function_norm', type=float, default=1.0)
     parser.add_argument('--num_elites', type=int, default=100)
     parser.add_argument('--beta', type=float, default=3.0)
-    
+    parser.add_argument('--violation_eps', type=float, default=1.0)
     # SBSRL-specific parameters
     parser.add_argument('--lambda_sigma', type=float, default=1.0, help='Weight for exploration penalty in SBSRL')
     parser.add_argument('--uncertainty_eps', type=float, default=1.0, help='Uncertainty threshold for SBSRL')
     parser.add_argument('--default_task_index', type=int, default=0, help='Which task reward to use as extrinsic component in SBSRL')
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
-
     parser.add_argument('--seed', type=int, default=0)
 
     parser.add_argument('--exp_result_folder', type=str, default=None)

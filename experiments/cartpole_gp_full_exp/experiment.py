@@ -36,8 +36,8 @@ def experiment(
         num_offline_data: int = 0,
         violation_eps: float = 0.1,
         optimizer: str = 'icem',
-        lambda_sigma: float = 1.0,
-        uncertainty_eps: float = 1.0,
+        lambda_sigma: float = 0.0,
+        uncertainty_eps: float = 100.0,
         default_task_index: int = 0,
         wandb_notes: str = None,
         num_traj: int = 0,
@@ -59,7 +59,7 @@ def experiment(
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.cartpole_lenart import CartPoleEnv, CartPoleOfflineData, CartPoleTrajectoryOfflineData
-    from smbrl.playground.cartpole_icem import PositionBoundBinary
+    from smbrl.playground.cartpole_icem import PositionBoundBinary, PositionBound
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
     from jaxtyping import Float, Array, Scalar
@@ -254,7 +254,7 @@ def experiment(
         lambda_constraint=lambda_constraint,
     )
 
-    cost_fn = PositionBoundBinary(horizon=icem_horizon,
+    cost_fn = PositionBound(horizon=icem_horizon,
                                   max_position=max_position,
                                   violation_eps=violation_eps, )
 
@@ -265,7 +265,7 @@ def experiment(
         'episode_length': episode_length,
         'action_repeat': action_repeat,
         'cost_fn': cost_fn,
-        'test_tasks': [Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
+        'test_tasks': [#Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
                        Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
                       ],
         'predict_difference': True,
@@ -408,7 +408,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', type=int, default=5)
     parser.add_argument('--exponent', type=float, default=1.0)
     parser.add_argument('--lambda_constraint', type=float, default=1e8)
-    parser.add_argument('--icem_horizon', type=int, default=20)
+    parser.add_argument('--icem_horizon', type=int, default=50)
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
     parser.add_argument('--max_position', type=float, default=1.5)
@@ -418,7 +418,7 @@ if __name__ == '__main__':
     parser.add_argument('--log_wandb', type=int, default=1)
     parser.add_argument('--num_gpus', type=int, default=0)
     parser.add_argument('--function_norm', type=float, default=1.0)
-    parser.add_argument('--num_elites', type=int, default=20)
+    parser.add_argument('--num_elites', type=int, default=50)
     parser.add_argument('--beta', type=float, default=2.0)
     parser.add_argument('--use_precomputed_kernel_params', type=int, default=0)
     parser.add_argument('--use_function_norms', type=int, default=0)
@@ -427,11 +427,11 @@ if __name__ == '__main__':
     parser.add_argument('--optimizer', type=str, default='icem')
 
     # SBSRL-specific parameters
-    parser.add_argument('--lambda_sigma', type=float, default=1)
+    parser.add_argument('--lambda_sigma', type=float, default=0)
     parser.add_argument('--uncertainty_eps', type=float, default=300)
-    parser.add_argument('--default_task_index', type=int, default=1)
+    parser.add_argument('--default_task_index', type=int, default=0)
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
-    parser.add_argument('--num_traj', type=int, default=2, help='Number of trajectories for trajectory-based data collection. 0=use uniform grid sampling')
+    parser.add_argument('--num_traj', type=int, default=0, help='Number of trajectories for trajectory-based data collection. 0=use uniform grid sampling')
 
     parser.add_argument('--seed', type=int, default=0)
 

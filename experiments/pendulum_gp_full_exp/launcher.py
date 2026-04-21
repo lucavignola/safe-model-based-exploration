@@ -37,10 +37,12 @@ _applicable_configs = {
     'lambda_constraint': [1e7],
     'icem_horizon': [20],
     'num_elites': [100],
-    'num_offline_data': [0]
+    'num_offline_data': [0],
+    'violation_eps': [0,0.5],
+    'log_wandb': [1],
 }
 
-num_particles = [10]
+num_particles = [30]
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1],
                                'num_particles': num_particles,
                                'beta': [3.0],
@@ -54,11 +56,11 @@ _applicable_configs_opax = {'alg_name': ['OPAX'], 'use_optimism': [1], 'use_pess
                            | _applicable_configs
 
 _applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pessimism': [1],
-                             'num_particles': num_particles+[1],
+                             'num_particles': num_particles,
                              'beta': [3.0],
-                             'lambda_sigma': [0,1000],
-                             'uncertainty_eps': [300],
-                             'default_task_index': [1],
+                             'lambda_sigma': [0,100,10000],
+                             'uncertainty_eps': [300,600,1000],
+                             'default_task_index': [0],
                              } \
                             | _applicable_configs
 
@@ -71,7 +73,7 @@ _applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pe
 # _applicable_configs_actsafe_no_optimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [1]} \
 #                                           | _applicable_configs
 #
-# _applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0]} \
+#_applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0]} \
 #                                            | _applicable_configs
 #
 _applicable_configs_safehucrl = {'alg_name': ['SafeHUCRL'], 'use_optimism': [1], 'use_pessimism': [1],
@@ -92,12 +94,12 @@ _applicable_configs_actsafe_mean = {'alg_name': ['ActSafe'], 'use_optimism': [0]
                                     } \
                                    | _applicable_configs
 
-all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
-                         + dict_permutations(_applicable_configs_actsafe_mean) \
-                         + dict_permutations(_applicable_configs_safehucrl) \
-                         + dict_permutations(_applicable_configs_opax) \
-                         + dict_permutations(_applicable_configs_sbsrl) \
-                         + dict_permutations(_applicable_configs_hucrl)
+all_flags_combinations = dict_permutations(_applicable_configs_sbsrl) #dict_permutations(_applicable_configs_actsafe) \
+#+ dict_permutations(_applicable_configs_actsafe_mean) \
+#+ dict_permutations(_applicable_configs_safehucrl) \
+#+ dict_permutations(_applicable_configs_sbsrl)
+#+ dict_permutations(_applicable_configs_opax) \
+ #+ dict_permutations(_applicable_configs_hucrl)
 
 
 
@@ -150,5 +152,3 @@ if __name__ == '__main__':
     args = parser.parse_args()
     main(args)
 
-    args = parser.parse_args()
-    main(args)
