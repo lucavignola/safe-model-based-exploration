@@ -38,6 +38,7 @@ def experiment(
         optimizer: str = 'icem',
         lambda_sigma: float = 0.0,
         uncertainty_eps: float = 100.0,
+        uncertainty_decay_factor: float = 10.0,
         default_task_index: int = 0,
         wandb_notes: str = None,
         num_traj: int = 0,
@@ -93,6 +94,7 @@ def experiment(
         optimizer=optimizer,
         lambda_sigma=lambda_sigma,
         uncertainty_eps=uncertainty_eps,
+        uncertainty_decay_factor=uncertainty_decay_factor,
         default_task_index=default_task_index,
         wandb_notes=wandb_notes  # Add to config for visibility
     )
@@ -283,6 +285,7 @@ def experiment(
         agent_kwargs.update({
             'lambda_sigma': lambda_sigma,
             'uncertainty_eps': uncertainty_eps,
+            'uncertainty_decay_factor': uncertainty_decay_factor,
             'default_task_index': default_task_index,
         })
 
@@ -388,6 +391,7 @@ def main(args):
         optimizer=args.optimizer,
         lambda_sigma=args.lambda_sigma,
         uncertainty_eps=args.uncertainty_eps,
+        uncertainty_decay_factor=args.uncertainty_decay_factor,
         default_task_index=args.default_task_index,
         wandb_notes=args.wandb_notes,
         num_traj=args.num_traj,
@@ -429,6 +433,7 @@ if __name__ == '__main__':
     # SBSRL-specific parameters
     parser.add_argument('--lambda_sigma', type=float, default=0)
     parser.add_argument('--uncertainty_eps', type=float, default=300)
+    parser.add_argument('--uncertainty_decay_factor', type=float, default=10.0)
     parser.add_argument('--default_task_index', type=int, default=0)
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
     parser.add_argument('--num_traj', type=int, default=0, help='Number of trajectories for trajectory-based data collection. 0=use uniform grid sampling')

@@ -82,6 +82,7 @@ _applicable_configs_sbsrl = {
     "num_particles": num_particles + [1],
     "lambda_sigma": [0],
     "uncertainty_eps": [300],
+    "uncertainty_decay_factor": [10.0],
     "default_task_index": [0],
 } | _applicable_configs
 

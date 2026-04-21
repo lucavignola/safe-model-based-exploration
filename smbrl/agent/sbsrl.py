@@ -85,12 +85,14 @@ class SBSRLAgent(SafeModelBasedAgent):
     - Follows exact same pattern as ActSafe for proper integration
     """
 
-    def __init__(self, default_task_index: int = 0, lambda_sigma: float = 1.0, uncertainty_eps: float = 1.0, *args, **kwargs):
+    def __init__(self, default_task_index: int = 0, lambda_sigma: float = 1.0, uncertainty_eps: float = 1.0,
+                 uncertainty_decay_factor: float = 10.0, *args, **kwargs):
         # Remove SBSRL-specific parameters from kwargs before passing to parent
         sbsrl_kwargs = {
             'default_task_index': default_task_index,
             'lambda_sigma': lambda_sigma,
-            'uncertainty_eps': uncertainty_eps
+            'uncertainty_eps': uncertainty_eps,
+            'uncertainty_decay_factor': uncertainty_decay_factor,
         }
 
         # Remove any SBSRL-specific parameters from kwargs that weren't already removed
@@ -103,6 +105,13 @@ class SBSRLAgent(SafeModelBasedAgent):
         self.default_task_index = default_task_index
         self.lambda_sigma = lambda_sigma
         self.uncertainty_eps = uncertainty_eps
+        self.uncertainty_decay_factor = uncertainty_decay_factor
+        self._sbsrl_reward: SBSRLReward | None = None
+
+    def get_episode_wandb_metrics(self, episode_idx: int) -> dict:
+        return {
+            'sbsrl/eps_sigma': float(self.uncertainty_eps),
+        }
 
     def get_train_rewards(self) -> Reward:
         """Return appropriate reward based on training vs evaluation mode
@@ -113,15 +122,30 @@ class SBSRLAgent(SafeModelBasedAgent):
         """
         if self.train_task_index == -1:
             # Training: use SBSRL reward
-            extrinsic_reward_fn = self.test_tasks[self.default_task_index].reward
-            return SBSRLReward(
-                x_dim=self.env.observation_size,
-                u_dim=self.env.action_size,
-                extrinsic_reward_fn=extrinsic_reward_fn,
-                extrinsic_task_index=self.default_task_index,
-                lambda_sigma=self.lambda_sigma,
-                eps_sigma=self.uncertainty_eps
-            )
+            if self._sbsrl_reward is None:
+                extrinsic_reward_fn = self.test_tasks[self.default_task_index].reward
+                self._sbsrl_reward = SBSRLReward(
+                    x_dim=self.env.observation_size,
+                    u_dim=self.env.action_size,
+                    extrinsic_reward_fn=extrinsic_reward_fn,
+                    extrinsic_task_index=self.default_task_index,
+                    lambda_sigma=self.lambda_sigma,
+                    eps_sigma=self.uncertainty_eps,
+                )
+            self._sbsrl_reward.eps_sigma = self.uncertainty_eps
+            return self._sbsrl_reward
         else:
             # Evaluation: use pure extrinsic task reward (no exploration penalty)
             return self.test_tasks[self.train_task_index].reward
+
+    def on_episode_end(self, episode_idx: int) -> None:
+        if self.train_task_index == -1:
+            self.uncertainty_eps = self.uncertainty_eps / self.uncertainty_decay_factor
+            if self._sbsrl_reward is not None:
+                self._sbsrl_reward.eps_sigma = self.uncertainty_eps
+            if self.log_to_wandb:
+                import wandb
+                wandb.log({
+                    'episode_idx': episode_idx,
+                    'sbsrl/eps_sigma_after_decay': float(self.uncertainty_eps),
+                })

@@ -168,6 +168,12 @@ class SafeModelBasedAgent:
         else:
             return self.test_tasks[self.train_task_index].reward
 
+    def get_episode_wandb_metrics(self, episode_idx: int) -> dict:
+        return {}
+
+    def on_episode_end(self, episode_idx: int) -> None:
+        return None
+
     def get_train_env_state(self, rng: jax.Array) -> State:
         if self.train_task_index == -1:
             return self.env.reset(rng=rng) #TODO: what does this return?
@@ -295,12 +301,14 @@ class SafeModelBasedAgent:
         # plt.show()
 
         if self.log_to_wandb:
-            wandb.log({
+            metrics = {
                 'episode_idx': episode_idx,
                 'intrinsic_rewards': jnp.sum(intrinsic_rewards).item(),
                 'extrinsic_rewards': jnp.sum(extrinsic_rewards).item(),
                 'constraint_cost': cost.item()
-            })
+            }
+            metrics.update(self.get_episode_wandb_metrics(episode_idx))
+            wandb.log(metrics)
 
         task_outputs = []
         for task in self.test_tasks:
@@ -392,6 +400,7 @@ class SafeModelBasedAgent:
                                                 train_model=train_model,
                                                 save_agent=save_agent,
                                                 folder_name=folder_name)
+            self.on_episode_end(episode_idx)
             print(f'End of Episode {episode_idx}')
         return model_state, data
 
