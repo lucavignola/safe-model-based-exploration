@@ -46,6 +46,7 @@ num_particles = [30]
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1],
                                'num_particles': num_particles,
                                'beta': [3.0],
+                               'actsafe_index': [-1],
                                } \
                               | _applicable_configs
 
@@ -61,6 +62,7 @@ _applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pe
                              'lambda_sigma': [0,100,10000],
                              'uncertainty_eps': [300,600,1000],
                              'uncertainty_decay_factor': [10.0],
+                             'uncertainty_constraint_threshold': [10.0],
                              'default_task_index': [0],
                              } \
                             | _applicable_configs

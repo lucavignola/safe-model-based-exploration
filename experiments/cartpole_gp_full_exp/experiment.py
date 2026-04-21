@@ -39,7 +39,9 @@ def experiment(
         lambda_sigma: float = 0.0,
         uncertainty_eps: float = 100.0,
         uncertainty_decay_factor: float = 10.0,
+        uncertainty_constraint_threshold: float = 10.0,
         default_task_index: int = 0,
+        actsafe_index: int = -1,
         wandb_notes: str = None,
         num_traj: int = 0,
 ):
@@ -95,7 +97,9 @@ def experiment(
         lambda_sigma=lambda_sigma,
         uncertainty_eps=uncertainty_eps,
         uncertainty_decay_factor=uncertainty_decay_factor,
+        uncertainty_constraint_threshold=uncertainty_constraint_threshold,
         default_task_index=default_task_index,
+        actsafe_index=actsafe_index,
         wandb_notes=wandb_notes  # Add to config for visibility
     )
     import jax
@@ -286,7 +290,13 @@ def experiment(
             'lambda_sigma': lambda_sigma,
             'uncertainty_eps': uncertainty_eps,
             'uncertainty_decay_factor': uncertainty_decay_factor,
+            'uncertainty_constraint_threshold': uncertainty_constraint_threshold,
             'default_task_index': default_task_index,
+        })
+    elif alg_name == 'ActSafe':
+        agent_kwargs.update({
+            'actsafe_index': actsafe_index,
+            'actsafe_task_index': default_task_index,
         })
 
     agent = alg(**agent_kwargs)
@@ -392,7 +402,9 @@ def main(args):
         lambda_sigma=args.lambda_sigma,
         uncertainty_eps=args.uncertainty_eps,
         uncertainty_decay_factor=args.uncertainty_decay_factor,
+        uncertainty_constraint_threshold=args.uncertainty_constraint_threshold,
         default_task_index=args.default_task_index,
+        actsafe_index=args.actsafe_index,
         wandb_notes=args.wandb_notes,
         num_traj=args.num_traj,
     )
@@ -434,7 +446,9 @@ if __name__ == '__main__':
     parser.add_argument('--lambda_sigma', type=float, default=0)
     parser.add_argument('--uncertainty_eps', type=float, default=300)
     parser.add_argument('--uncertainty_decay_factor', type=float, default=10.0)
+    parser.add_argument('--uncertainty_constraint_threshold', type=float, default=50.0)
     parser.add_argument('--default_task_index', type=int, default=0)
+    parser.add_argument('--actsafe_index', type=int, default=-1)
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
     parser.add_argument('--num_traj', type=int, default=0, help='Number of trajectories for trajectory-based data collection. 0=use uniform grid sampling')
 

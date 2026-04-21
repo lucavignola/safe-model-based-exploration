@@ -86,13 +86,16 @@ class SBSRLAgent(SafeModelBasedAgent):
     """
 
     def __init__(self, default_task_index: int = 0, lambda_sigma: float = 1.0, uncertainty_eps: float = 1.0,
-                 uncertainty_decay_factor: float = 10.0, *args, **kwargs):
+                 uncertainty_decay_factor: float = 10.0,
+                 uncertainty_constraint_threshold: float = 50.0,
+                 *args, **kwargs):
         # Remove SBSRL-specific parameters from kwargs before passing to parent
         sbsrl_kwargs = {
             'default_task_index': default_task_index,
             'lambda_sigma': lambda_sigma,
             'uncertainty_eps': uncertainty_eps,
             'uncertainty_decay_factor': uncertainty_decay_factor,
+            'uncertainty_constraint_threshold': uncertainty_constraint_threshold,
         }
 
         # Remove any SBSRL-specific parameters from kwargs that weren't already removed
@@ -106,12 +109,32 @@ class SBSRLAgent(SafeModelBasedAgent):
         self.lambda_sigma = lambda_sigma
         self.uncertainty_eps = uncertainty_eps
         self.uncertainty_decay_factor = uncertainty_decay_factor
+        self.uncertainty_constraint_threshold = uncertainty_constraint_threshold
+        self.uncertainty_constraint_enabled = True
+        self.latest_uncertainty_penalty_mean = 0.0
         self._sbsrl_reward: SBSRLReward | None = None
 
     def get_episode_wandb_metrics(self, episode_idx: int) -> dict:
         return {
             'sbsrl/eps_sigma': float(self.uncertainty_eps),
+            'sbsrl/uncertainty_penalty_mean': float(self.latest_uncertainty_penalty_mean),
+            'sbsrl/uncertainty_constraint_enabled': float(self.uncertainty_constraint_enabled),
         }
+
+    def on_exploration_rollout_end(self,
+                                   episode_idx: int,
+                                   intrinsic_rewards: chex.Array,
+                                   extrinsic_rewards: chex.Array) -> None:
+        if self.train_task_index != -1:
+            return
+        penalty = relu(self.uncertainty_eps - intrinsic_rewards)
+        self.latest_uncertainty_penalty_mean = float(jnp.mean(penalty))
+        if self.uncertainty_constraint_enabled and (
+                self.latest_uncertainty_penalty_mean > self.uncertainty_constraint_threshold):
+            self.uncertainty_eps = 0.0
+            self.uncertainty_constraint_enabled = False
+            if self._sbsrl_reward is not None:
+                self._sbsrl_reward.eps_sigma = self.uncertainty_eps
 
     def get_train_rewards(self) -> Reward:
         """Return appropriate reward based on training vs evaluation mode

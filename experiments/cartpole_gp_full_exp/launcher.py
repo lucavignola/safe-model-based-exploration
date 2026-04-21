@@ -59,6 +59,7 @@ _applicable_configs_actsafe = {
     "use_optimism": [1],
     "use_pessimism": [1],
     "num_particles": num_particles,
+    "actsafe_index": [-1],
 } | _applicable_configs
 
 _applicable_configs_actsafe_no_pessimism = {
@@ -83,6 +84,7 @@ _applicable_configs_sbsrl = {
     "lambda_sigma": [0],
     "uncertainty_eps": [300],
     "uncertainty_decay_factor": [10.0],
+    "uncertainty_constraint_threshold": [10.0],
     "default_task_index": [0],
 } | _applicable_configs
 

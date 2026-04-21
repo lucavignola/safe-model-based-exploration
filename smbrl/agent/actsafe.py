@@ -174,6 +174,12 @@ class SafeModelBasedAgent:
     def on_episode_end(self, episode_idx: int) -> None:
         return None
 
+    def on_exploration_rollout_end(self,
+                                   episode_idx: int,
+                                   intrinsic_rewards: chex.Array,
+                                   extrinsic_rewards: chex.Array) -> None:
+        return None
+
     def get_train_env_state(self, rng: jax.Array) -> State:
         if self.train_task_index == -1:
             return self.env.reset(rng=rng) #TODO: what does this return?
@@ -294,6 +300,12 @@ class SafeModelBasedAgent:
             model_state=model_state,
             key=key)
 
+        self.on_exploration_rollout_end(
+            episode_idx=episode_idx,
+            intrinsic_rewards=intrinsic_rewards,
+            extrinsic_rewards=extrinsic_rewards,
+        )
+
         # import matplotlib.pyplot as plt
         # plt.plot(exploration_states.obs)
         # plt.axhline(y=-1.5, color='r', linestyle='-')
@@ -391,6 +403,7 @@ class SafeModelBasedAgent:
         for episode_idx in range(num_episodes):
             key, subkey = jr.split(key)
             train_model = train_model or episode_idx > 0
+            self.current_episode_idx = episode_idx
             print(f'Starting with Episode {episode_idx}')
             save_agent = episode_idx % self.saving_frequency == 0
             model_state, data = self.do_episode(model_state=model_state,
@@ -406,8 +419,20 @@ class SafeModelBasedAgent:
 
 
 class ActSafeAgent(SafeModelBasedAgent):
-    def __init__(self, *args, **kwargs):
+    def __init__(self,
+                 actsafe_index: int = -1,
+                 actsafe_task_index: int = 0,
+                 *args,
+                 **kwargs):
         super().__init__(train_task_index=-1, *args, **kwargs)
+        self.actsafe_index = actsafe_index
+        self.actsafe_task_index = actsafe_task_index
+        self.current_episode_idx = 0
+
+    def get_train_rewards(self) -> Reward:
+        if self.actsafe_index >= 0 and self.current_episode_idx >= self.actsafe_index:
+            return self.test_tasks[self.actsafe_task_index].reward
+        return super().get_train_rewards()
 
 
 class SafeHUCRL(SafeModelBasedAgent):
