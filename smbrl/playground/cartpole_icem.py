@@ -115,7 +115,7 @@ class PositionBound(AbstractCost):
         position = states[:, 0]
         trajectory_constraint = jnp.maximum(jnp.abs(position) - (self.max_position - self.violation_eps), 0.0)
         assert trajectory_constraint.shape == (self.horizon,)
-        return jnp.mean(trajectory_constraint)
+        return jnp.sum(trajectory_constraint)
 
 
 class PositionBoundBinary(AbstractCost):

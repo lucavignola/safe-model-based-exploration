@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 from jax import vmap
-from jax.nn import relu
+from jax.nn import relu,gelu
 from jax.numpy import sqrt, newaxis
 from jax.numpy.fft import irfft, rfftfreq
 from jaxtyping import Float, Array, Key, Scalar
@@ -285,7 +285,7 @@ class iCemTO(BaseOptimizer):
                 assert cost.shape == (self.opt_params.num_particles,)
                 # We summarize cost with mean or max (if pessimism is true)
                 cost = self.summarize_cost_samples(cost)
-            return reward - self.opt_params.lambda_constraint * relu(cost)
+            return reward - self.opt_params.lambda_constraint * gelu(cost)
 
         get_best_action = lambda best_val, best_seq, val, seq: [val[-1], seq[-1]]
         get_curr_best_action = lambda best_val, best_seq, val, seq: [best_val, best_seq]

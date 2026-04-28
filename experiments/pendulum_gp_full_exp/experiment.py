@@ -219,7 +219,7 @@ def experiment(
         'action_repeat': action_repeat,
         'cost_fn': cost_fn,
         'test_tasks': [
-            Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
+            #Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
             Task(reward=PendulumReward(), name='Swing up', env=env),
         ],
         'predict_difference': True,
