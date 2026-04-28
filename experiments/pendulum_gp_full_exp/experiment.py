@@ -10,7 +10,7 @@ from smbrl.utils.experiment_utils import Logger, hash_dict
 def experiment(
         project_name: str = 'ActSafeTest',
         alg_name: str = 'ActSafe',
-        entity_name: str = 'lvignola-eth-z-rich',
+        entity_name: str = 'anonymous-entity',
         exp_hash: str = '42',
         num_offline_data: int = 100,
         seed: int = 0,
@@ -254,13 +254,13 @@ def experiment(
     if log_wandb:
         import wandb
 
-        # Setup wandb environment for Euler if needed
+        # Setup wandb environment for Cluster if needed
         if logs_dir.startswith('/cluster/scratch/'):
             import os
             if not os.getenv('WANDB_CACHE_DIR'):
-                os.environ['WANDB_CACHE_DIR'] = '/cluster/scratch/lvignola/wandb'
-                os.environ['WANDB_CONFIG_DIR'] = '/cluster/scratch/lvignola/wandb/config'
-                os.environ['WANDB_DATA_DIR'] = '/cluster/scratch/lvignola/wandb/data'
+                os.environ['WANDB_CACHE_DIR'] = '/cluster/scratch/anonymous/wandb'
+                os.environ['WANDB_CONFIG_DIR'] = '/cluster/scratch/anonymous/wandb/config'
+                os.environ['WANDB_DATA_DIR'] = '/cluster/scratch/anonymous/wandb/data'
 
         wandb_kwargs = {
             'project': project_name,
@@ -375,7 +375,7 @@ if __name__ == '__main__':
     parser.add_argument('--logs_dir', type=str, default='logs')
     parser.add_argument('--project_name', type=str, default='ActSafeTest')
     parser.add_argument('--alg_name', type=str, default='ActSafe')
-    parser.add_argument('--entity_name', type=str, default='lvignola-eth-z-rich')
+    parser.add_argument('--entity_name', type=str, default='anonymous-entity')
     parser.add_argument('--num_offline_data', type=int, default=100)
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)

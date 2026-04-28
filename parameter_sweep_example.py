@@ -6,7 +6,7 @@ import sys
 import os
 import argparse
 
-# Add the project root to path (works both locally and on Euler)
+# Add the project root to path (works both locally and on Cluster)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 sys.path.insert(0, os.path.join(current_dir, 'experiments', 'pendulum_gp_full_exp'))
@@ -19,7 +19,7 @@ from smbrl.utils.experiment_utils import generate_run_commands, generate_base_co
 def get_sweep_config(wandb_notes):
     return {
         'project_name': ['PendulumSweep'],  
-        'entity_name': ['lvignola-eth-z-rich'],  # Use entity_name not entity
+        'entity_name': ['anonymous-entity'],  # Use entity_name not entity
         'alg_name': ['SBSRL'],
         'seed': [0, 1, 2, 3, 4],  # Multiple seeds
         'lambda_sigma': [0, 100, 1000, 100000],  # Different penalty weights
@@ -28,7 +28,7 @@ def get_sweep_config(wandb_notes):
         'num_particles': [20],  # Fixed
         'num_training_steps': [1000],
         'log_wandb': [1],
-        'logs_dir': ['/cluster/scratch/lvignola/PendulumSweep/'],  # Ensure Euler path
+        'logs_dir': ['/cluster/scratch/anonymous/PendulumSweep/'],  # Ensure Cluster path
         'wandb_notes': [wandb_notes] if wandb_notes else ['Mar01-sbsrl_sweep']
     }
 
@@ -53,11 +53,11 @@ def main(args=None):
         cmd = generate_base_command(experiment, flags=flags)
         command_list.append(cmd)
     
-    # Launch on Euler with RTX 4090 - increased timeout
+    # Launch on Cluster with RTX 4090 - increased timeout
     generate_run_commands(command_list,
                           num_cpus=10,
                           num_gpus=1,  
-                          mode='euler',
+                          mode='cluster',
                           duration='3:00:00',  # Increased from 2h to 3h
                           gpu_type='rtx_4090',
                           prompt=True)

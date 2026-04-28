@@ -135,14 +135,14 @@ def generate_run_commands(command_list: List[str], output_file_list: Optional[Li
                           mode: str = 'local', prompt: bool = True,
                           gpu_type: Optional[str] = None,
                           ) -> None:
-    if mode == 'euler':
+    if mode == 'cluster':
         cluster_cmds = []
         bsub_cmd = 'sbatch ' + \
                    f'--time={duration} ' + \
                    '--mem-per-cpu=10240 ' + \
                    f'--cpus-per-task={num_cpus} ' + \
                    '--tasks-per-node=1 ' + \
-                   '--account=ls_krausea ' + \
+                   '--account=anonymous_account ' + \
                    '--job-name=smbrl_exp ' + \
                    '--partition=gpuhe.24h ' + \
                    '--requeue '

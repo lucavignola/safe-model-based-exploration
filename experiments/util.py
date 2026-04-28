@@ -120,7 +120,7 @@ def generate_run_commands(command_list: List[str],
                           duration: str = '3:59:00',
                           mode: str = 'local',
                           prompt: bool = True) -> None:
-    if mode == 'euler':
+    if mode == 'cluster':
         cluster_cmds = []
         bsub_cmd = 'sbatch ' + \
                    f'--time={duration} ' + \

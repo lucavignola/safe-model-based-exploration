@@ -166,7 +166,7 @@ class ModelBasedAgent:
         collected_states = [env_state]
         actions = []
         extrinsic_rewards = []
-        # TODO: Should implement treatment of done flags
+
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
             for _ in range(self.action_repeat):
@@ -192,7 +192,7 @@ class ModelBasedAgent:
     def from_collected_transitions_to_data(self,
                                            collected_states: PyTree[Array, 'episode_length ...'],
                                            actions: Float[Array, 'episode_length action_dim']) -> Data:
-        # TODO: Isn't this wrong, if we have a done flag in collected_states?
+
         states = collected_states.obs[:-1]
         next_states = collected_states.obs[1:]
         inputs = jnp.concatenate([states, actions], axis=-1)
@@ -258,7 +258,7 @@ class ModelBasedAgent:
             self.plot_trajectories(exploration_states.obs, exploration_actions, exploration_rewards,
                                    title=f'Exploration trajectory Episode {episode_idx}')
 
-            # TODO: The following works only locally since latex is not installed on Euler server
+            # The following works only locally since latex is not installed on Cluster server
             # th = jnp.arctan2(exploration_states.obs[:, 1], exploration_states.obs[:, 0])
             # omega = exploration_states.obs[:, 2]
             # u = exploration_actions[:, 0]

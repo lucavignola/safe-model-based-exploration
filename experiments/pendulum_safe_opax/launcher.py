@@ -19,7 +19,7 @@ def main():
     generate_run_commands(command_list,
                           num_cpus=1,
                           num_gpus=0,
-                          mode='euler',
+                          mode='cluster',
                           duration='23:59:00',
                           prompt=True,
                           mem=32000)

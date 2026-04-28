@@ -136,7 +136,7 @@ class ExplorationSystem(System, Generic[ModelState, RewardParams]):
         else:
             # Check if it's an SBSRL reward that needs intrinsic reward
             from smbrl.agent.sbsrl import SBSRLReward
-            if isinstance(self.reward, SBSRLReward): #TODO: I think this if can be merged with the one above
+            if isinstance(self.reward, SBSRLReward):
                 # SBSRL needs full x_next (with intrinsic reward) like ExplorationReward
                 reward_dist, new_reward_params = self.reward(x, u, reward_params, x_next)
             else:

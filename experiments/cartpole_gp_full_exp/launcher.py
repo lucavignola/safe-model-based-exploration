@@ -7,7 +7,7 @@ from smbrl.utils.experiment_utils import (
 import argparse
 
 PROJECT_NAME = "CartPoleGP"
-ENTITY = "lvignola-eth-z-rich"
+ENTITY = "anonymous-entity"
 NUM_GPUS = 1
 
 # Hardware configurations matching working Hydra setup
@@ -109,9 +109,9 @@ def main(args):
     command_list = []
 
     logs_dir = "../"
-    if args.mode == "euler":
+    if args.mode == "cluster":
         logs_dir = "/cluster/scratch/"
-        logs_dir += "lvignola" + "/" + PROJECT_NAME + "/"
+        logs_dir += "anonymous" + "/" + PROJECT_NAME + "/"
 
     for flags in all_flags_combinations:
         flags["logs_dir"] = logs_dir
@@ -140,7 +140,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--mode", type=str, default="euler", help="how to launch the experiments"
+        "--mode", type=str, default="cluster", help="how to launch the experiments"
     )
     parser.add_argument("--long_run", default=False, action="store_true")
     parser.add_argument(

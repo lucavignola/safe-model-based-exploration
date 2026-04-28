@@ -182,7 +182,7 @@ class SafeModelBasedAgent:
 
     def get_train_env_state(self, rng: jax.Array) -> State:
         if self.train_task_index == -1:
-            return self.env.reset(rng=rng) #TODO: what does this return?
+            return self.env.reset(rng=rng)
         else:
             env = self.test_tasks[self.train_task_index].env
             return env.reset(rng=rng)
@@ -241,7 +241,7 @@ class SafeModelBasedAgent:
         actions = []
         intrinsic_rewards = []
         extrinsic_rewards = []
-        # TODO: Should implement treatment of done flags
+
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
             print(f'Step {i}: reward is {optimizer_state.best_reward}')
@@ -268,7 +268,7 @@ class SafeModelBasedAgent:
     def from_collected_transitions_to_data(self,
                                            collected_states: PyTree[Array, 'episode_length ...'],
                                            actions: Float[Array, 'episode_length action_dim']) -> Data:
-        # TODO: Isn't this wrong, if we have a done flag in collected_states?
+        
         states = collected_states.obs[:-1]
         next_states = collected_states.obs[1:]
         inputs = jnp.concatenate([states, actions], axis=-1)
