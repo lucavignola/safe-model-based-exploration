@@ -285,3 +285,6 @@ saved_data/
 *.jpeg
 *.gif
 *.pdf
+
+# Analysis
+analysis/
