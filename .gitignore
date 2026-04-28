@@ -278,3 +278,10 @@ tb_logs/
 
 # Large saved experiment data
 saved_data/
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
