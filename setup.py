@@ -10,8 +10,8 @@ required = [
     'pandas',
     'jaxtyping>=0.2.20',
     'matplotlib>=3.5.1',
-    'mbpo @ git+https://github.com/lasgroup/Model-based-policy-optimizers.git',
-    'mbrl @ git+https://github.com/lasgroup/model-based-rl.git'
+    'mbpo', # anonymous repository
+    'mbrl' # anonymous repository
 ]
 
 extras = {}
