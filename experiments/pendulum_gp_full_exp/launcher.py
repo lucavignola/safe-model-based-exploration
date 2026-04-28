@@ -62,6 +62,7 @@ _applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pe
                              'lambda_sigma': [0,100,10000],
                              'uncertainty_eps': [300,600,1000],
                              'uncertainty_decay_factor': [10.0],
+                             'uncertainty_decay_mode': ['linear', 'log_sigma_eps'],
                              'uncertainty_constraint_threshold': [10.0],
                              'default_task_index': [0],
                              } \

@@ -39,6 +39,7 @@ def experiment(
         lambda_sigma: float = 1.0,
         uncertainty_eps: float = 1.0,
         uncertainty_decay_factor: float = 10.0,
+        uncertainty_decay_mode: str = 'linear',
         uncertainty_constraint_threshold: float = 50.0,
         default_task_index: int = 0,
         actsafe_index: int = -1,
@@ -131,6 +132,7 @@ def experiment(
         lambda_sigma=lambda_sigma,
         uncertainty_eps=uncertainty_eps,
         uncertainty_decay_factor=uncertainty_decay_factor,
+        uncertainty_decay_mode=uncertainty_decay_mode,
         uncertainty_constraint_threshold=uncertainty_constraint_threshold,
         default_task_index=default_task_index,
         actsafe_index=actsafe_index,
@@ -237,6 +239,7 @@ def experiment(
             'lambda_sigma': lambda_sigma,
             'uncertainty_eps': uncertainty_eps,
             'uncertainty_decay_factor': uncertainty_decay_factor,
+            'uncertainty_decay_mode': uncertainty_decay_mode,
             'uncertainty_constraint_threshold': uncertainty_constraint_threshold,
             'default_task_index': default_task_index,
         })
@@ -357,6 +360,7 @@ def main(args):
         lambda_sigma=args.lambda_sigma,
         uncertainty_eps=args.uncertainty_eps,
         uncertainty_decay_factor=args.uncertainty_decay_factor,
+        uncertainty_decay_mode=args.uncertainty_decay_mode,
         uncertainty_constraint_threshold=args.uncertainty_constraint_threshold,
         default_task_index=args.default_task_index,
         actsafe_index=args.actsafe_index,
@@ -399,6 +403,7 @@ if __name__ == '__main__':
     parser.add_argument('--lambda_sigma', type=float, default=1.0, help='Weight for exploration penalty in SBSRL')
     parser.add_argument('--uncertainty_eps', type=float, default=1.0, help='Uncertainty threshold for SBSRL')
     parser.add_argument('--uncertainty_decay_factor', type=float, default=10.0, help='Divide SBSRL uncertainty threshold by this factor each episode')
+    parser.add_argument('--uncertainty_decay_mode', type=str, default='linear', choices=['linear', 'log_sigma_eps'], help='How SBSRL eps_sigma decays over episodes')
     parser.add_argument('--uncertainty_constraint_threshold', type=float, default=50.0, help='Disable SBSRL uncertainty constraint when mean relu(eps-intrinsic) exceeds this threshold')
     parser.add_argument('--default_task_index', type=int, default=0, help='Which task reward to use as extrinsic component in SBSRL')
     parser.add_argument('--actsafe_index', type=int, default=-1, help='Episode index from which ActSafe switches to task-reward exploitation (-1 disables)')

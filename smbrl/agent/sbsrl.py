@@ -87,6 +87,7 @@ class SBSRLAgent(SafeModelBasedAgent):
 
     def __init__(self, default_task_index: int = 0, lambda_sigma: float = 1.0, uncertainty_eps: float = 1.0,
                  uncertainty_decay_factor: float = 10.0,
+                 uncertainty_decay_mode: str = 'linear',
                  uncertainty_constraint_threshold: float = 50.0,
                  *args, **kwargs):
         # Remove SBSRL-specific parameters from kwargs before passing to parent
@@ -95,6 +96,7 @@ class SBSRLAgent(SafeModelBasedAgent):
             'lambda_sigma': lambda_sigma,
             'uncertainty_eps': uncertainty_eps,
             'uncertainty_decay_factor': uncertainty_decay_factor,
+            'uncertainty_decay_mode': uncertainty_decay_mode,
             'uncertainty_constraint_threshold': uncertainty_constraint_threshold,
         }
 
@@ -107,8 +109,10 @@ class SBSRLAgent(SafeModelBasedAgent):
         self.train_task_index = -1
         self.default_task_index = default_task_index
         self.lambda_sigma = lambda_sigma
+        self.initial_uncertainty_eps = uncertainty_eps
         self.uncertainty_eps = uncertainty_eps
         self.uncertainty_decay_factor = uncertainty_decay_factor
+        self.uncertainty_decay_mode = uncertainty_decay_mode
         self.uncertainty_constraint_threshold = uncertainty_constraint_threshold
         self.uncertainty_constraint_enabled = True
         self.latest_uncertainty_penalty_mean = 0.0
@@ -163,7 +167,15 @@ class SBSRLAgent(SafeModelBasedAgent):
 
     def on_episode_end(self, episode_idx: int) -> None:
         if self.train_task_index == -1:
-            self.uncertainty_eps = self.uncertainty_eps / self.uncertainty_decay_factor
+            if self.uncertainty_constraint_enabled:
+                if self.uncertainty_decay_mode == 'linear':
+                    self.uncertainty_eps = self.uncertainty_eps / self.uncertainty_decay_factor
+                elif self.uncertainty_decay_mode == 'log_sigma_eps':
+                    self.uncertainty_eps = self.initial_uncertainty_eps / (1.0 + jnp.log(episode_idx + 2.0))
+                else:
+                    raise ValueError(f'Unknown uncertainty_decay_mode {self.uncertainty_decay_mode}')
+            else:
+                self.uncertainty_eps = 0.0
             if self._sbsrl_reward is not None:
                 self._sbsrl_reward.eps_sigma = self.uncertainty_eps
             if self.log_to_wandb:
