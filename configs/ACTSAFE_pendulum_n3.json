@@ -1,0 +1,119 @@
+{
+  "beta": {
+    "value": 3
+  },
+  "seed": {
+    "value": 3
+  },
+  "alpha": {
+    "value": 0.2
+  },
+  "_wandb": {
+    "value": {
+      "m": [],
+      "t": {
+        "1": [
+          12,
+          45
+        ],
+        "2": [
+          12,
+          45
+        ],
+        "3": [
+          3,
+          15,
+          16,
+          41
+        ],
+        "4": "3.11.6",
+        "5": "0.25.0",
+        "12": "0.25.0",
+        "13": "linux-x86_64"
+      },
+      "cli_version": "0.25.0",
+      "python_version": "3.11.6"
+    }
+  },
+  "alg_name": {
+    "value": "ActSafe"
+  },
+  "exponent": {
+    "value": 0.2
+  },
+  "num_gpus": {
+    "value": 1
+  },
+  "num_steps": {
+    "value": 5
+  },
+  "num_elites": {
+    "value": 100
+  },
+  "num_samples": {
+    "value": 1000
+  },
+  "wandb_notes": {
+    "value": "Apr21-actsafe_exploit2"
+  },
+  "icem_horizon": {
+    "value": 20
+  },
+  "lambda_sigma": {
+    "value": 1
+  },
+  "use_optimism": {
+    "value": true
+  },
+  "action_repeat": {
+    "value": 2
+  },
+  "actsafe_index": {
+    "value": 3
+  },
+  "function_norm": {
+    "value": 1
+  },
+  "num_particles": {
+    "value": 30
+  },
+  "reward_source": {
+    "value": "gym"
+  },
+  "use_pessimism": {
+    "value": true
+  },
+  "violation_eps": {
+    "value": 0.5
+  },
+  "episode_length": {
+    "value": 50
+  },
+  "uncertainty_eps": {
+    "value": 1
+  },
+  "max_abs_velocity": {
+    "value": 6
+  },
+  "num_offline_data": {
+    "value": 0
+  },
+  "env_margin_factor": {
+    "value": 10
+  },
+  "lambda_constraint": {
+    "value": 10000000
+  },
+  "default_task_index": {
+    "value": 0
+  },
+  "num_training_steps": {
+    "value": 1000
+  },
+  "uncertainty_decay_factor": {
+    "value": 10
+  },
+  "uncertainty_constraint_threshold": {
+    "value": 50
+  }
+}

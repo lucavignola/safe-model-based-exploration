@@ -1,0 +1,228 @@
+{
+  "beta": {
+    "value": 3
+  },
+  "seed": {
+    "value": 4
+  },
+  "alpha": {
+    "value": 0.2
+  },
+  "_wandb": {
+    "value": {
+      "e": {
+        "jy9hhzd6lwbiwgc5ez8lbet6zypczhf8": {
+          "os": "Linux-5.15.0-171-generic-x86_64-with-glibc2.35",
+          "git": {
+            "commit": "91777c848bd3a1dde193d62053f8a607be9e4fe6",
+            "remote": "https://github.com/lucavignola/safe-model-based-exploration.git"
+          },
+          "gpu": "NVIDIA GeForce RTX 4090",
+          "args": [
+            "--alg_name=SBSRL",
+            "--use_optimism=0",
+            "--use_pessimism=1",
+            "--num_particles=30",
+            "--lambda_sigma=0",
+            "--uncertainty_eps=300",
+            "--default_task_index=0",
+            "--project_name=CartPoleGP",
+            "--num_training_steps=500",
+            "--episode_length=50",
+            "--action_repeat=2",
+            "--seed=4",
+            "--entity=lvignola-eth-z-rich",
+            "--num_gpus=1",
+            "--beta=3.0",
+            "--use_precomputed_kernel_params=0",
+            "--use_function_norms=0",
+            "--num_offline_data=20",
+            "--max_position=1.5",
+            "--num_samples=1000",
+            "--icem_horizon=30",
+            "--num_elites=100",
+            "--num_steps=5",
+            "--violation_eps=0.6",
+            "--num_traj=0",
+            "--logs_dir=/cluster/scratch/lvignola/CartPoleGP/",
+            "--wandb_notes=Mar17-cartpole_posbound_sum"
+          ],
+          "disk": {
+            "/": {
+              "used": "8082006016",
+              "total": "10737418240"
+            }
+          },
+          "host": "eu-g6-005",
+          "root": "/cluster/home/lvignola/safe-model-based-exploration/experiments/cartpole_gp_full_exp",
+          "email": "lvignola@student.ethz.ch",
+          "slurm": {
+            "conf": "/cluster/slurm/adm/etc/slurm.conf",
+            "gpus": "nvidia_geforce_rtx_4090:1",
+            "gtids": "0",
+            "jobid": "60760199",
+            "job_id": "60760199",
+            "nnodes": "1",
+            "nodeid": "0",
+            "nprocs": "1",
+            "ntasks": "1",
+            "procid": "0",
+            "job_gid": "518341",
+            "job_qos": "ls_krausea/gpuhe/4",
+            "job_uid": "637389",
+            "localid": "0",
+            "job_gpus": "3",
+            "job_name": "smbrl_exp",
+            "job_user": "lvignola",
+            "nodelist": "eu-g6-005",
+            "task_pid": "1637966",
+            "export_env": "ALL,OMP_NUM_THREADS=10",
+            "submit_dir": "/cluster/home/lvignola/safe-model-based-exploration/experiments/cartpole_gp_full_exp",
+            "job_account": "gpuhe/ls_krausea",
+            "mem_per_cpu": "10240",
+            "submit_host": "eu-login-37",
+            "cluster_name": "euler-24-production",
+            "cpus_on_node": "10",
+            "get_user_env": "1",
+            "gpus_on_node": "1",
+            "job_end_time": "1773870673",
+            "job_nodelist": "eu-g6-005",
+            "prio_process": "0",
+            "cpus_per_task": "10",
+            "job_num_nodes": "1",
+            "job_partition": "gpuhe.4h",
+            "oom_kill_step": "0",
+            "topology_addr": ".euler_rtx4090_lca_ib.eu-g6-005",
+            "tres_per_task": "cpu=10",
+            "job_start_time": "1773859873",
+            "script_context": "prolog_task",
+            "tasks_per_node": "1",
+            "ntasks_per_node": "1",
+            "job_cpus_per_node": "10",
+            "topology_addr_pattern": "switch.switch.node"
+          },
+          "memory": {
+            "total": "538293420032"
+          },
+          "python": "CPython 3.11.6",
+          "program": "/cluster/home/lvignola/safe-model-based-exploration/experiments/cartpole_gp_full_exp/experiment.py",
+          "codePath": "experiments/cartpole_gp_full_exp/experiment.py",
+          "writerId": "jy9hhzd6lwbiwgc5ez8lbet6zypczhf8",
+          "cpu_count": 128,
+          "gpu_count": 1,
+          "startedAt": "2026-03-18T18:51:26.094838Z",
+          "executable": "/cluster/home/lvignola/safe-model-based-exploration/venvgp_euler/bin/python",
+          "gpu_nvidia": [
+            {
+              "name": "NVIDIA GeForce RTX 4090",
+              "uuid": "GPU-612127f4-06fc-519d-d46d-31bb62aec62a",
+              "cudaCores": 16384,
+              "memoryTotal": "25757220864",
+              "architecture": "Ada"
+            }
+          ],
+          "cudaVersion": "13.0",
+          "codePathLocal": "experiment.py",
+          "cpu_count_logical": 128
+        }
+      },
+      "m": [],
+      "t": {
+        "1": [
+          12,
+          45
+        ],
+        "2": [
+          12,
+          45
+        ],
+        "3": [
+          3,
+          15,
+          16
+        ],
+        "4": "3.11.6",
+        "5": "0.25.0",
+        "12": "0.25.0",
+        "13": "linux-x86_64"
+      },
+      "cli_version": "0.25.0",
+      "python_version": "3.11.6"
+    }
+  },
+  "alg_name": {
+    "value": "SBSRL"
+  },
+  "exponent": {
+    "value": 1
+  },
+  "num_gpus": {
+    "value": 1
+  },
+  "num_steps": {
+    "value": 5
+  },
+  "optimizer": {
+    "value": "icem"
+  },
+  "num_elites": {
+    "value": 100
+  },
+  "num_samples": {
+    "value": 1000
+  },
+  "wandb_notes": {
+    "value": "Mar17-cartpole_posbound_sum"
+  },
+  "icem_horizon": {
+    "value": 30
+  },
+  "lambda_sigma": {
+    "value": 0
+  },
+  "max_position": {
+    "value": 1.5
+  },
+  "use_optimism": {
+    "value": false
+  },
+  "action_repeat": {
+    "value": 2
+  },
+  "function_norm": {
+    "value": 1
+  },
+  "num_particles": {
+    "value": 30
+  },
+  "use_pessimism": {
+    "value": true
+  },
+  "violation_eps": {
+    "value": 0.6
+  },
+  "episode_length": {
+    "value": 50
+  },
+  "uncertainty_eps": {
+    "value": 300
+  },
+  "num_offline_data": {
+    "value": 20
+  },
+  "lambda_constraint": {
+    "value": 100000000
+  },
+  "default_task_index": {
+    "value": 0
+  },
+  "num_training_steps": {
+    "value": 500
+  },
+  "use_function_norms": {
+    "value": false
+  },
+  "use_precomputed_kernel_params": {
+    "value": false
+  }
+}
