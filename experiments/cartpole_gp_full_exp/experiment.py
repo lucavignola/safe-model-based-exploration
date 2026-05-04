@@ -22,6 +22,7 @@ def experiment(
         episode_length: int = 50,
         action_repeat: int = 2,
         max_position: float = 0.5,
+        action_cost: float = 0.0,
         num_training_steps: int = 1_000,
         use_optimism: bool = True,
         use_pessimism: bool = True,
@@ -50,7 +51,6 @@ def experiment(
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
 
-    import jax.numpy as jnp
     import jax.random as jr
     import chex
     import wandb
@@ -63,7 +63,7 @@ def experiment(
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.cartpole_lenart import CartPoleEnv, CartPoleOfflineData, CartPoleTrajectoryOfflineData
-    from smbrl.playground.cartpole_icem import PositionBoundBinary, PositionBound
+    from smbrl.playground.cartpole_icem import PositionBound
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
     from jaxtyping import Float, Array, Scalar
@@ -83,6 +83,7 @@ def experiment(
         episode_length=episode_length,
         action_repeat=action_repeat,
         max_position=max_position,
+        action_cost=action_cost,
         num_training_steps=num_training_steps,
         use_optimism=use_optimism,
         use_pessimism=use_pessimism,
@@ -229,8 +230,7 @@ def experiment(
             diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
             reward = -(reward_params.angle_cost * diff_th ** 2 + reward_params.pos_cost * position ** 2 +
                        reward_params.vel_cost * (
-                               linear_velocity ** 2 + angular_velocity ** 2)) - reward_params.control_cost * u[
-                         0] ** 2
+                           linear_velocity ** 2 + angular_velocity ** 2)) - reward_params.control_cost * u[0] ** 2
             reward = reward.squeeze()
             return Normal(loc=reward, scale=jnp.zeros_like(reward)), reward_params
 
@@ -289,6 +289,7 @@ def experiment(
     # Add SBSRL-specific parameters if needed
     if alg_name == 'SBSRL':
         agent_kwargs.update({
+            'action_cost': action_cost,
             'lambda_sigma': lambda_sigma,
             'uncertainty_eps': uncertainty_eps,
             'uncertainty_decay_factor': uncertainty_decay_factor,
@@ -386,6 +387,7 @@ def main(args):
         icem_horizon=args.icem_horizon,
         episode_length=args.episode_length,
         max_position=args.max_position,
+        action_cost=args.action_cost,
         num_training_steps=args.num_training_steps,
         use_optimism=bool(args.use_optimism),
         use_pessimism=bool(args.use_pessimism),
@@ -432,6 +434,7 @@ if __name__ == '__main__':
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
     parser.add_argument('--max_position', type=float, default=1.5)
+    parser.add_argument('--action_cost', type=float, default=0.0)
     parser.add_argument('--num_training_steps', type=int, default=1_000)
     parser.add_argument('--use_optimism', type=int, default=1)
     parser.add_argument('--use_pessimism', type=int, default=1)

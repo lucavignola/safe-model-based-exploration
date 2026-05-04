@@ -24,6 +24,7 @@ def experiment(
         episode_length: int = 50,
         action_repeat: int = 2,
         max_abs_velocity: float = 6.0,
+        action_cost: float = 0.0,
         num_training_steps: int = 1_000,
         env_margin_factor: float = 10.0,
         reward_source: str = 'gym',
@@ -49,7 +50,6 @@ def experiment(
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
 
-    import jax.numpy as jnp
     import jax.random as jr
     import chex
     import wandb
@@ -119,6 +119,7 @@ def experiment(
         episode_length=episode_length,
         action_repeat=action_repeat,
         max_abs_velocity=max_abs_velocity,
+        action_cost=action_cost,
         num_training_steps=num_training_steps,
         env_margin_factor=env_margin_factor,
         reward_source=reward_source,
@@ -236,6 +237,7 @@ def experiment(
     # Add SBSRL-specific parameters if needed
     if alg_name == 'SBSRL':
         agent_kwargs.update({
+            'action_cost': action_cost,
             'lambda_sigma': lambda_sigma,
             'uncertainty_eps': uncertainty_eps,
             'uncertainty_decay_factor': uncertainty_decay_factor,
@@ -387,6 +389,7 @@ if __name__ == '__main__':
     parser.add_argument('--episode_length', type=int, default=50)
     parser.add_argument('--action_repeat', type=int, default=2)
     parser.add_argument('--max_abs_velocity', type=float, default=6.0)
+    parser.add_argument('--action_cost', type=float, default=0.0)
     parser.add_argument('--num_training_steps', type=int, default=1_000)
     parser.add_argument('--env_margin_factor', type=float, default=10.0)
     parser.add_argument('--reward_source', type=str, default='gym')
