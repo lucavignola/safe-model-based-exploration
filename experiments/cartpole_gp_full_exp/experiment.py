@@ -52,6 +52,7 @@ def experiment(
         os.environ['JAX_PLATFORMS'] = 'cpu'
 
     import jax.random as jr
+    import jax.numpy as jnp
     import chex
     import wandb
     from smbrl.agent.actsafe import ActSafeAgent, SafeHUCRL
