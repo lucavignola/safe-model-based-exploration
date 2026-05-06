@@ -24,6 +24,7 @@ from optax import Schedule, constant_schedule
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
 from smbrl.optimizer.icem import iCemParams, iCemTO, AbstractCost
 # from smbrl.optimizer.ipopt_optimizer import IPOPTOptimizer, IPOPTParams
+from smbrl.utils.tolerance_reward import ToleranceReward
 from smbrl.utils.utils import create_folder, ExplorationTrajectory
 
 
@@ -319,6 +320,13 @@ class SafeModelBasedAgent:
                 'extrinsic_rewards': jnp.sum(extrinsic_rewards).item(),
                 'constraint_cost': cost.item()
             }
+            if hasattr(self, 'action_cost'):
+                action_tolerance = ToleranceReward(bounds=(-0.1, 0.1), margin=0.1, sigmoid='gaussian')
+                action_penalty = getattr(self, 'action_cost') * jnp.sum(1 - action_tolerance(exploration_actions))
+                metrics['sbsrl_action_penalty'] = action_penalty.item()
+                metrics['sbsrl_reward_no_exploration_penalty'] = (
+                    jnp.sum(extrinsic_rewards) - action_penalty
+                ).item()
             metrics.update(self.get_episode_wandb_metrics(episode_idx))
             wandb.log(metrics)
 

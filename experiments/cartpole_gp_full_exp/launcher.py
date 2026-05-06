@@ -82,6 +82,7 @@ _applicable_configs_sbsrl = {
     "use_pessimism": [1],
     "num_particles": num_particles + [1],
     "lambda_sigma": [0],
+    "action_cost": [0.0, 0.01],
     "uncertainty_eps": [300],
     "uncertainty_decay_factor": [10.0],
     "uncertainty_decay_mode": ["linear", "log_sigma_eps"],

@@ -60,6 +60,7 @@ _applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pe
                              'num_particles': num_particles,
                              'beta': [3.0],
                              'lambda_sigma': [0,100,10000],
+                             'action_cost': [0.0, 0.01],
                              'uncertainty_eps': [300,600,1000],
                              'uncertainty_decay_factor': [10.0],
                              'uncertainty_decay_mode': ['linear', 'log_sigma_eps'],
