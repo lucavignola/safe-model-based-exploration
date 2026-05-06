@@ -361,6 +361,7 @@ def main(args):
         violation_eps=args.violation_eps,
         beta=args.beta,
         lambda_sigma=args.lambda_sigma,
+        action_cost=args.action_cost,
         uncertainty_eps=args.uncertainty_eps,
         uncertainty_decay_factor=args.uncertainty_decay_factor,
         uncertainty_decay_mode=args.uncertainty_decay_mode,
