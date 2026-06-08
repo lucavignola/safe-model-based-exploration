@@ -27,6 +27,7 @@ def experiment(
         action_cost: float = 0.0,
         num_training_steps: int = 1_000,
         env_margin_factor: float = 10.0,
+        process_noise_scale: float = 1e-3,
         reward_source: str = 'gym',
         use_optimism: bool = True,
         use_pessimism: bool = True,
@@ -124,6 +125,7 @@ def experiment(
         action_cost=action_cost,
         num_training_steps=num_training_steps,
         env_margin_factor=env_margin_factor,
+        process_noise_scale=process_noise_scale,
         reward_source=reward_source,
         use_optimism=use_optimism,
         use_pessimism=use_pessimism,
@@ -217,16 +219,22 @@ def experiment(
                             max_abs_velocity=max_abs_velocity,
                             violation_eps=violation_eps, )
 
+    true_env_process_noise_scale = process_noise_scale * jnp.ones(env.observation_size)
+    true_env = PendulumEnv(margin_factor=env_margin_factor,
+                           reward_source=reward_source,
+                           add_process_noise=True,
+                           process_noise_scale=true_env_process_noise_scale)
+
     # Create agent with appropriate parameters
     agent_kwargs = {
-        'env': PendulumEnv(margin_factor=env_margin_factor, reward_source=reward_source),
+        'env': true_env,
         'model': model,
         'episode_length': episode_length,
         'action_repeat': action_repeat,
         'cost_fn': cost_fn,
         'test_tasks': [
             #Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
-            Task(reward=PendulumReward(), name='Swing up', env=env),
+            Task(reward=PendulumReward(), name='Swing up', env=true_env),
         ],
         'predict_difference': True,
         'num_training_steps': constant_schedule(num_training_steps),
@@ -351,6 +359,7 @@ def main(args):
         max_abs_velocity=args.max_abs_velocity,
         num_training_steps=args.num_training_steps,
         env_margin_factor=args.env_margin_factor,
+        process_noise_scale=args.process_noise_scale,
         reward_source=args.reward_source,
         use_optimism=bool(args.use_optimism),
         use_pessimism=bool(args.use_pessimism),
@@ -398,6 +407,7 @@ if __name__ == '__main__':
     parser.add_argument('--action_cost', type=float, default=0.0)
     parser.add_argument('--num_training_steps', type=int, default=1_000)
     parser.add_argument('--env_margin_factor', type=float, default=10.0)
+    parser.add_argument('--process_noise_scale', type=float, default=1e-3)
     parser.add_argument('--reward_source', type=str, default='gym')
     parser.add_argument('--use_optimism', type=int, default=1)
     parser.add_argument('--use_pessimism', type=int, default=1)
@@ -407,7 +417,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_elites', type=int, default=100)
     parser.add_argument('--violation_eps', type=float, default=0.1)
     parser.add_argument('--beta', type=float, default=3.0)
-    parser.add_argument('--use_mean_dynamics', type=bool, default=False)
+    parser.add_argument('--use_mean_dynamics', action='store_true')
 
     # SBSRL-specific parameters
     parser.add_argument('--lambda_sigma', type=float, default=1.0, help='Weight for exploration penalty in SBSRL')

@@ -2,7 +2,7 @@ import experiment
 from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
 import argparse
 
-PROJECT_NAME = 'PendulumGP'
+PROJECT_NAME = 'ExplorationPendulumGP'
 ENTITY = 'lvignola-eth-z-rich'
 NUM_GPUS = 1
 
@@ -27,6 +27,7 @@ HARDWARE_CONFIGS = {
 
 _applicable_configs = {
     'env_margin_factor': [10],
+    'process_noise_scale': [1e-3],
     'reward_source': ['gym'],
     'project_name': [PROJECT_NAME],
     'num_training_steps': [1_000],
@@ -40,7 +41,7 @@ _applicable_configs = {
     'num_offline_data': [0],
     'violation_eps': [0],
     'log_wandb': [1],
-    'use_mean_dynamics': [False, True],
+    'use_mean_dynamics': [True],
 }
 
 num_particles = [1]

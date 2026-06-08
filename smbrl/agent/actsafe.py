@@ -103,6 +103,7 @@ class SafeModelBasedAgent:
                                                    u_dim=self.env.action_size,
                                                    model=self.model,
                                                    use_mean_dynamics=self.use_mean_dynamics,
+                                                   aleatoric_noise_in_prediction=(not self.use_mean_dynamics),
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -203,6 +204,7 @@ class SafeModelBasedAgent:
                                                    u_dim=self.env.action_size,
                                                    model=self.model,
                                                    use_mean_dynamics=self.use_mean_dynamics,
+                                                   aleatoric_noise_in_prediction=(not self.use_mean_dynamics),
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
