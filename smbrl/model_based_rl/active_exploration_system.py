@@ -29,6 +29,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                  scale_with_aleatoric_std: bool = True,
                  aleatoric_noise_in_prediction: bool = True,
                  predict_difference: bool = True,
+                 use_mean_dynamics: bool = False,
                  ):
         Dynamics.__init__(self, x_dim=x_dim, u_dim=u_dim)
         self.model = model
@@ -36,6 +37,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         self.scale_with_aleatoric_std = scale_with_aleatoric_std
         self.aleatoric_noise_in_prediction = aleatoric_noise_in_prediction
         self.predict_difference = predict_difference
+        self.use_mean_dynamics = use_mean_dynamics
 
     def init_params(self, key: chex.PRNGKey) -> DynamicsParams:
         param_key, model_state_key = jr.split(key, 2)
@@ -70,9 +72,15 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         beta = pred.statistical_model_state.beta
         x_next = x
         if self.predict_difference:
-            x_next += pred.mean + beta * epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
+            if self.use_mean_dynamics:
+                x_next += pred.mean
+            else:
+                x_next += pred.mean + beta * epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
         else:
-            x_next = pred.mean + beta * epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
+            if self.use_mean_dynamics:
+                x_next = pred.mean
+            else:
+                x_next = pred.mean + beta * epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
 
         intrinsic_reward = self.get_intrinsic_reward(epistemic_std, aleatoric_std)
         intrinsic_reward = jnp.atleast_1d(intrinsic_reward)

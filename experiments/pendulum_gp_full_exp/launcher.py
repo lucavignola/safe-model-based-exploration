@@ -34,15 +34,16 @@ _applicable_configs = {
     'entity': [ENTITY],
     'num_gpus': [NUM_GPUS],
     'num_samples': [1_000],
-    'lambda_constraint': [1e7],
+    'lambda_constraint': [0],
     'icem_horizon': [20],
     'num_elites': [100],
     'num_offline_data': [0],
-    'violation_eps': [0,0.5],
+    'violation_eps': [0],
     'log_wandb': [1],
+    'use_mean_dynamics': [False, True],
 }
 
-num_particles = [30]
+num_particles = [1]
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1],
                                'num_particles': num_particles,
                                'beta': [3.0],
@@ -56,15 +57,15 @@ _applicable_configs_opax = {'alg_name': ['OPAX'], 'use_optimism': [1], 'use_pess
                             } \
                            | _applicable_configs
 
-_applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pessimism': [1],
+_applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [0], 'use_pessimism': [0],
                              'num_particles': num_particles,
                              'beta': [3.0],
-                             'lambda_sigma': [0,100,10000],
-                             'action_cost': [0.0, 0.01],
-                             'uncertainty_eps': [300,600,1000],
-                             'uncertainty_decay_factor': [10.0],
-                             'uncertainty_decay_mode': ['linear', 'log_sigma_eps'],
-                             'uncertainty_constraint_threshold': [10.0],
+                             'lambda_sigma': [0],
+                             'action_cost': [0.0],
+                             'uncertainty_eps': [0],
+                             'uncertainty_decay_factor': [1],
+                             'uncertainty_decay_mode': ['linear'],
+                             'uncertainty_constraint_threshold': [0],
                              'default_task_index': [0],
                              } \
                             | _applicable_configs

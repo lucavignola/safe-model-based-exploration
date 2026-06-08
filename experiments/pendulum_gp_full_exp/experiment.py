@@ -45,6 +45,7 @@ def experiment(
         default_task_index: int = 0,
         actsafe_index: int = -1,
         wandb_notes: str = None,
+        use_mean_dynamics: bool = False,
 ):
     if num_gpus == 0:
         import os
@@ -138,7 +139,8 @@ def experiment(
         uncertainty_constraint_threshold=uncertainty_constraint_threshold,
         default_task_index=default_task_index,
         actsafe_index=actsafe_index,
-        wandb_notes=wandb_notes  # Add to config for visibility
+        wandb_notes=wandb_notes,  # Add to config for visibility
+        use_mean_dynamics=use_mean_dynamics,
     )
 
     model = GPStatisticalModel(
@@ -233,6 +235,7 @@ def experiment(
         'log_to_wandb': log_wandb,
         'use_pessimism': use_pessimism,
         'use_optimism': use_optimism,
+        'use_mean_dynamics': use_mean_dynamics,
     }
 
     # Add SBSRL-specific parameters if needed
@@ -369,6 +372,7 @@ def main(args):
         default_task_index=args.default_task_index,
         actsafe_index=args.actsafe_index,
         wandb_notes=args.wandb_notes,
+        use_mean_dynamics=args.use_mean_dynamics,
     )
 
 
@@ -403,6 +407,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_elites', type=int, default=100)
     parser.add_argument('--violation_eps', type=float, default=0.1)
     parser.add_argument('--beta', type=float, default=3.0)
+    parser.add_argument('--use_mean_dynamics', type=bool, default=False)
 
     # SBSRL-specific parameters
     parser.add_argument('--lambda_sigma', type=float, default=1.0, help='Weight for exploration penalty in SBSRL')

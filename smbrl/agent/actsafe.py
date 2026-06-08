@@ -53,7 +53,8 @@ class SafeModelBasedAgent:
                  train_task_index: int = -1,
                  use_optimism: bool = True,
                  use_pessimism: bool = True,
-                 optimizer: str = 'icem'  # can be 'icem' or 'ipopt'
+                 optimizer: str = 'icem',  # can be 'icem' or 'ipopt'
+                 use_mean_dynamics: bool = False,
                  ):
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
@@ -83,6 +84,7 @@ class SafeModelBasedAgent:
         self.log_to_wandb = log_to_wandb
         self.optimizer = optimizer
         self.ipopt_params = ipopt_params
+        self.use_mean_dynamics = use_mean_dynamics
 
     def train_dynamics_model(self,
                              model_state: ModelState,
@@ -100,6 +102,7 @@ class SafeModelBasedAgent:
         exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
                                                    u_dim=self.env.action_size,
                                                    model=self.model,
+                                                   use_mean_dynamics=self.use_mean_dynamics,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -199,6 +202,7 @@ class SafeModelBasedAgent:
         exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
                                                    u_dim=self.env.action_size,
                                                    model=self.model,
+                                                   use_mean_dynamics=self.use_mean_dynamics,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
