@@ -47,6 +47,7 @@ def experiment(
         actsafe_index: int = -1,
         wandb_notes: str = None,
         use_mean_dynamics: bool = False,
+        aleatoric_noise_in_prediction: bool = True,
 ):
     if num_gpus == 0:
         import os
@@ -143,6 +144,7 @@ def experiment(
         actsafe_index=actsafe_index,
         wandb_notes=wandb_notes,  # Add to config for visibility
         use_mean_dynamics=use_mean_dynamics,
+        aleatoric_noise_in_prediction=aleatoric_noise_in_prediction,
     )
 
     model = GPStatisticalModel(
@@ -244,6 +246,7 @@ def experiment(
         'use_pessimism': use_pessimism,
         'use_optimism': use_optimism,
         'use_mean_dynamics': use_mean_dynamics,
+        'aleatoric_noise_in_prediction': aleatoric_noise_in_prediction,
     }
 
     # Add SBSRL-specific parameters if needed
@@ -382,6 +385,7 @@ def main(args):
         actsafe_index=args.actsafe_index,
         wandb_notes=args.wandb_notes,
         use_mean_dynamics=args.use_mean_dynamics,
+        aleatoric_noise_in_prediction=args.aleatoric_noise_in_prediction,
     )
 
 
@@ -418,6 +422,7 @@ if __name__ == '__main__':
     parser.add_argument('--violation_eps', type=float, default=0.1)
     parser.add_argument('--beta', type=float, default=3.0)
     parser.add_argument('--use_mean_dynamics', action='store_true')
+    parser.add_argument('--aleatoric_noise_in_prediction', action='store_true')
 
     # SBSRL-specific parameters
     parser.add_argument('--lambda_sigma', type=float, default=1.0, help='Weight for exploration penalty in SBSRL')

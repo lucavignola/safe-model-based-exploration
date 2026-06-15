@@ -42,6 +42,7 @@ _applicable_configs = {
     'violation_eps': [0],
     'log_wandb': [1],
     'use_mean_dynamics': [True],
+    'aleatoric_noise_in_prediction': [False],
 }
 
 num_particles = [1]

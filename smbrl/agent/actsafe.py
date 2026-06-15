@@ -55,6 +55,7 @@ class SafeModelBasedAgent:
                  use_pessimism: bool = True,
                  optimizer: str = 'icem',  # can be 'icem' or 'ipopt'
                  use_mean_dynamics: bool = False,
+                 aleatoric_noise_in_prediction: bool = True,
                  ):
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
@@ -85,6 +86,7 @@ class SafeModelBasedAgent:
         self.optimizer = optimizer
         self.ipopt_params = ipopt_params
         self.use_mean_dynamics = use_mean_dynamics
+        self.aleatoric_noise_in_prediction = aleatoric_noise_in_prediction
 
     def train_dynamics_model(self,
                              model_state: ModelState,
@@ -103,7 +105,7 @@ class SafeModelBasedAgent:
                                                    u_dim=self.env.action_size,
                                                    model=self.model,
                                                    use_mean_dynamics=self.use_mean_dynamics,
-                                                   aleatoric_noise_in_prediction=(not self.use_mean_dynamics),
+                                                   aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -204,7 +206,7 @@ class SafeModelBasedAgent:
                                                    u_dim=self.env.action_size,
                                                    model=self.model,
                                                    use_mean_dynamics=self.use_mean_dynamics,
-                                                   aleatoric_noise_in_prediction=(not self.use_mean_dynamics),
+                                                   aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
