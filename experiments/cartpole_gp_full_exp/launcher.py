@@ -52,6 +52,9 @@ _applicable_configs = {
     "num_steps": [5],
     "violation_eps":  [0.6],
     "num_traj": [0],  # 0=uniform grid sampling, >0=trajectory-based sampling
+    "process_noise_scale": [1e-3],
+    "use_mean_dynamics": [True],
+    "aleatoric_noise_in_prediction": [False],
 }
 num_particles = [30]
 _applicable_configs_actsafe = {

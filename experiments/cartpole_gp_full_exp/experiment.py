@@ -46,6 +46,9 @@ def experiment(
         actsafe_index: int = -1,
         wandb_notes: str = None,
         num_traj: int = 0,
+        process_noise_scale: float = 1e-3,
+        use_mean_dynamics: bool = False,
+        aleatoric_noise_in_prediction: bool = True,
 ):
     if num_gpus == 0:
         import os
@@ -104,7 +107,10 @@ def experiment(
         uncertainty_constraint_threshold=uncertainty_constraint_threshold,
         default_task_index=default_task_index,
         actsafe_index=actsafe_index,
-        wandb_notes=wandb_notes  # Add to config for visibility
+        wandb_notes=wandb_notes,  # Add to config for visibility
+        process_noise_scale=process_noise_scale,
+        use_mean_dynamics=use_mean_dynamics,
+        aleatoric_noise_in_prediction=aleatoric_noise_in_prediction,
     )
     import jax
     jax.config.update("jax_enable_x64", True)
@@ -158,6 +164,7 @@ def experiment(
         )
 
     env = CartPoleEnv()
+    true_env = CartPoleEnv(add_process_noise=True, process_noise_scale=process_noise_scale)
 
     if use_precomputed_kernel_params:
         num_training_steps = constant_schedule(0)
@@ -269,13 +276,13 @@ def experiment(
 
     # Create agent with appropriate parameters
     agent_kwargs = {
-        'env': CartPoleEnv(),
+        'env': true_env,
         'model': model,
         'episode_length': episode_length,
         'action_repeat': action_repeat,
         'cost_fn': cost_fn,
         'test_tasks': [#Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
-                       Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=env),
+                       Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=true_env),
                       ],
         'predict_difference': True,
         'num_training_steps': num_training_steps,
@@ -285,6 +292,8 @@ def experiment(
         'use_pessimism': use_pessimism,
         'use_optimism': use_optimism,
         'optimizer': optimizer,
+        'use_mean_dynamics': use_mean_dynamics,
+        'aleatoric_noise_in_prediction': aleatoric_noise_in_prediction,
     }
 
     # Add SBSRL-specific parameters if needed
@@ -414,6 +423,9 @@ def main(args):
         actsafe_index=args.actsafe_index,
         wandb_notes=args.wandb_notes,
         num_traj=args.num_traj,
+        process_noise_scale=args.process_noise_scale,
+        use_mean_dynamics=args.use_mean_dynamics,
+        aleatoric_noise_in_prediction=args.aleatoric_noise_in_prediction,
     )
 
 
@@ -460,6 +472,9 @@ if __name__ == '__main__':
     parser.add_argument('--actsafe_index', type=int, default=-1)
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
     parser.add_argument('--num_traj', type=int, default=0, help='Number of trajectories for trajectory-based data collection. 0=use uniform grid sampling')
+    parser.add_argument('--process_noise_scale', type=float, default=1e-3)
+    parser.add_argument('--use_mean_dynamics', action='store_true')
+    parser.add_argument('--aleatoric_noise_in_prediction', action='store_true')
 
     parser.add_argument('--seed', type=int, default=0)
 

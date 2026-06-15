@@ -34,11 +34,15 @@ class CartPoleEnv(Env):
     def __init__(self,
                  reward_source: str = 'gym',
                  init_angle: float = 0.0,
+                 add_process_noise: bool = False,
+                 process_noise_scale: Float[Array, 'observation_dim'] | float = 1e-3,
                  ):
         self.dynamics_params = CartPoleDynamicsParams()
         self.reward_params = CartPoleRewardParams()
         self.init_angle = init_angle
         self.reward_source = reward_source
+        self.add_process_noise = add_process_noise
+        self.process_noise_scale = process_noise_scale
 
     def reset(self,
               rng: jax.Array) -> State:
@@ -46,6 +50,8 @@ class CartPoleEnv(Env):
                       obs=jnp.array([0.0, jnp.cos(self.init_angle), jnp.sin(self.init_angle), 0.0, 0.0]),
                       reward=jnp.array(0.0),
                       done=jnp.array(0.0), )
+        if self.add_process_noise:
+            state.info['process_noise_key'] = rng
         return state
 
     @staticmethod
@@ -100,6 +106,12 @@ class CartPoleEnv(Env):
 
         next_x_compressed = x_compressed + dx * dt
         next_obs = self.from_state_to_obs(next_x_compressed)
+
+        if self.add_process_noise:
+            key = state.info['process_noise_key']
+            key, subkey = jr.split(key)
+            next_obs += self.process_noise_scale * jr.normal(key=subkey, shape=(self.observation_size,))
+            state.info['process_noise_key'] = key
 
         if self.reward_source == 'gym':
             next_reward = self.reward(x, action)
