@@ -6,7 +6,7 @@ from smbrl.utils.experiment_utils import (
 )
 import argparse
 
-PROJECT_NAME = "CartPoleGP"
+PROJECT_NAME = "ExplorationCartPoleGP"
 ENTITY = "lvignola-eth-z-rich"
 NUM_GPUS = 1
 
@@ -38,11 +38,12 @@ _applicable_configs = {
     "entity": [ENTITY],
     "num_gpus": [NUM_GPUS],
     "beta": [3.0],
+    "lambda_constraint": [0],
     "use_precomputed_kernel_params": [
         0,
     ],
     "use_function_norms": [0],
-    "num_offline_data": [20],
+    "num_offline_data": [0],
     "max_position": [1.5],
     "num_samples": [1000],
     "icem_horizon": [
@@ -54,9 +55,9 @@ _applicable_configs = {
     "num_traj": [0],  # 0=uniform grid sampling, >0=trajectory-based sampling
     "process_noise_scale": [1e-3],
     "use_mean_dynamics": [True],
-    "aleatoric_noise_in_prediction": [False],
+    "aleatoric_noise_in_prediction": [True],
 }
-num_particles = [30]
+num_particles = [10]
 _applicable_configs_actsafe = {
     "alg_name": ["ActSafe"],
     "use_optimism": [1],
@@ -82,14 +83,14 @@ _applicable_configs_opax = {
 _applicable_configs_sbsrl = {
     "alg_name": ["SBSRL"],
     "use_optimism": [0],
-    "use_pessimism": [1],
-    "num_particles": num_particles + [1],
+    "use_pessimism": [0],
+    "num_particles": num_particles,
     "lambda_sigma": [0],
-    "action_cost": [0.0, 0.01],
-    "uncertainty_eps": [300],
-    "uncertainty_decay_factor": [10.0],
-    "uncertainty_decay_mode": ["linear", "log_sigma_eps"],
-    "uncertainty_constraint_threshold": [10.0],
+    "action_cost": [0],
+    "uncertainty_eps": [0],
+    "uncertainty_decay_factor": [1],
+    "uncertainty_decay_mode": ["linear"],
+    "uncertainty_constraint_threshold": [0],
     "default_task_index": [0],
 } | _applicable_configs
 
@@ -100,12 +101,12 @@ _applicable_configs_safehucrl = {
     "num_particles": num_particles,
 } | _applicable_configs
 
-all_flags_combinations = (
-    dict_permutations(_applicable_configs_actsafe)
+all_flags_combinations = ( dict_permutations(_applicable_configs_sbsrl)
+#    dict_permutations(_applicable_configs_actsafe)
 #    + dict_permutations(_applicable_configs_actsafe_no_pessimism)
-     +dict_permutations(_applicable_configs_opax)
+#     +dict_permutations(_applicable_configs_opax)
 #     dict_permutations(_applicable_configs_sbsrl)
-    + dict_permutations(_applicable_configs_safehucrl)
+#    + dict_permutations(_applicable_configs_safehucrl)
 )
 
 

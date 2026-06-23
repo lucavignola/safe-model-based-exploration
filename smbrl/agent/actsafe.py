@@ -87,6 +87,7 @@ class SafeModelBasedAgent:
         self.ipopt_params = ipopt_params
         self.use_mean_dynamics = use_mean_dynamics
         self.aleatoric_noise_in_prediction = aleatoric_noise_in_prediction
+        self.enable_additional_exploration_optimizer = False
 
     def train_dynamics_model(self,
                              model_state: ModelState,
@@ -186,6 +187,51 @@ class SafeModelBasedAgent:
                                    intrinsic_rewards: chex.Array,
                                    extrinsic_rewards: chex.Array) -> None:
         return None
+
+    def get_additional_exploration_optimum(self,
+                                           model_state: ModelState,
+                                           key: Key[Array, '2']) -> chex.Array | None:
+        if not self.enable_additional_exploration_optimizer or self.optimizer != 'icem':
+            return None
+
+        exploration_dynamics = ExplorationDynamics(
+            x_dim=self.env.observation_size,
+            u_dim=self.env.action_size,
+            model=self.model,
+            use_log=False,
+            scale_with_aleatoric_std=False,
+            use_mean_dynamics=False,
+            aleatoric_noise_in_prediction=True,
+        )
+        learned_system = ExplorationSystem(
+            dynamics=exploration_dynamics,
+            reward=ExplorationReward(
+                x_dim=self.env.observation_size,
+                u_dim=self.env.action_size,
+            ),
+        )
+
+        key, optimizer_key = jr.split(key)
+        optimizer = iCemTO(
+            horizon=self.episode_length, #TODO: check that it is not too long + action_repeat
+            action_dim=self.env.action_size,
+            key=optimizer_key,
+            opt_params=self.icem_params,
+            system=learned_system,
+            cost_fn=None,
+            use_optimism=True,
+            use_pessimism=self.use_pessimism,
+        )
+
+        key, init_key = jr.split(key)
+        optimizer_state = optimizer.init(key=init_key)
+        dynamics_params = optimizer_state.system_params.dynamics_params.replace(model_state=model_state)
+        system_params = optimizer_state.system_params.replace(dynamics_params=dynamics_params)
+        optimizer_state = optimizer_state.replace(system_params=system_params)
+
+        env_state = self.get_train_env_state(rng=key)
+        _, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
+        return optimizer_state.best_objective_sum
 
     def get_train_env_state(self, rng: jax.Array) -> State:
         if self.train_task_index == -1:
@@ -305,6 +351,10 @@ class SafeModelBasedAgent:
 
         # We collect new data with the current policy
         print(f'Start of data collection')
+        additional_opt = self.get_additional_exploration_optimum(
+            model_state=model_state,
+            key=key,
+        )
         exploration_states, exploration_actions, intrinsic_rewards, extrinsic_rewards, cost = self.simulate_on_true_env(
             model_state=model_state,
             key=key)
@@ -322,12 +372,19 @@ class SafeModelBasedAgent:
         # plt.show()
 
         if self.log_to_wandb:
+            intrinsic_rewards_sum = jnp.sum(intrinsic_rewards).item()
             metrics = {
                 'episode_idx': episode_idx,
-                'intrinsic_rewards': jnp.sum(intrinsic_rewards).item(),
+                'intrinsic_rewards': intrinsic_rewards_sum,
                 'extrinsic_rewards': jnp.sum(extrinsic_rewards).item(),
                 'constraint_cost': cost.item()
             }
+            if additional_opt is not None:
+                additional_opt_value = additional_opt.item()
+                metrics['additional_opt'] = additional_opt_value
+                metrics['additional_opt_intrinsic_rewards_ratio'] = (
+                    additional_opt_value / intrinsic_rewards_sum if intrinsic_rewards_sum != 0 else float('inf')
+                )
             if hasattr(self, 'action_cost'):
                 action_tolerance = ToleranceReward(bounds=(-0.1, 0.1), margin=0.1, sigmoid='gaussian')
                 action_penalty = getattr(self, 'action_cost') * jnp.sum(1 - action_tolerance(exploration_actions))

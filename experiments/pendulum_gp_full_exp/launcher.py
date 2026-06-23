@@ -42,10 +42,10 @@ _applicable_configs = {
     'violation_eps': [0],
     'log_wandb': [1],
     'use_mean_dynamics': [True],
-    'aleatoric_noise_in_prediction': [False],
+    'aleatoric_noise_in_prediction': [True],
 }
 
-num_particles = [1]
+num_particles = [10]
 _applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1],
                                'num_particles': num_particles,
                                'beta': [3.0],
@@ -159,4 +159,3 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     main(args)
-

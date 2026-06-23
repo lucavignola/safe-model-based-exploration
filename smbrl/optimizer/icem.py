@@ -176,6 +176,7 @@ class ICemCarry(NamedTuple):
     mean: Float[Array, 'horizon action_dim']
     std: Float[Array, 'horizon action_dim']
     best_value: Scalar
+    best_objective_sum: Scalar
     best_sequence: Float[Array, 'horizon action_dim']
     prev_elites: Float[Array, 'num_elites horizon action_dim']
 
@@ -186,6 +187,7 @@ class iCemOptimizerState(OptimizerState[DynamicsParams, RewardParams]):
     system_params: chex.Array = None
     best_sequence: chex.Array = None
     best_reward: chex.Array = None
+    best_objective_sum: chex.Array = None
     key: chex.Array = None
 
     @property
@@ -248,6 +250,7 @@ class iCemTO(BaseOptimizer):
             system_params=system_params,
             best_sequence=jnp.zeros(self.opt_dim),
             best_reward=jnp.zeros(1).squeeze(),
+            best_objective_sum=jnp.zeros(1).squeeze(),
             key=key,
         )
 
@@ -261,7 +264,7 @@ class iCemTO(BaseOptimizer):
 
         # To estimate mean trajectory under some action sequence we sample self.opt_params.num_particles number of
         # noisy realization of the dynamics propagation
-        def objective(seq: Float[Array, 'horizon action_dim'], key: Key[Array, '2']) -> Scalar:
+        def objective(seq: Float[Array, 'horizon action_dim'], key: Key[Array, '2']) -> Tuple[Scalar, Scalar]:
             from jax.nn import relu  # Import at function level #TODO: why? I think this is needed to avoid circular imports with actsafe and sbsrl reward that also use relu
 
             def optimize_fn(init_state: Float[Array, 'observation_dim'], rng: Key[Array, '2']):
@@ -278,17 +281,19 @@ class iCemTO(BaseOptimizer):
             cost = 0
 
             # Standard case: use reward from system
-            reward = self.summarize_raw_samples(jnp.mean(transitions.reward, axis=-1))
+            reward_samples = jnp.mean(transitions.reward, axis=-1)
+            reward = self.summarize_raw_samples(reward_samples)
+            reward_sum = self.summarize_raw_samples(jnp.sum(transitions.reward, axis=-1))
             
             if self.cost_fn is not None:
                 cost = vmap(self.cost_fn)(transitions.observation, transitions.action)
                 assert cost.shape == (self.opt_params.num_particles,)
                 # We summarize cost with mean or max (if pessimism is true)
                 cost = self.summarize_cost_samples(cost)
-            return reward - self.opt_params.lambda_constraint * gelu(cost)
+            return reward - self.opt_params.lambda_constraint * gelu(cost), reward_sum
 
-        get_best_action = lambda best_val, best_seq, val, seq: [val[-1], seq[-1]]
-        get_curr_best_action = lambda best_val, best_seq, val, seq: [best_val, best_seq]
+        get_best_action = lambda best_val, best_sum, best_seq, val, val_sum, seq: [val[-1], val_sum[-1], seq[-1]]
+        get_curr_best_action = lambda best_val, best_sum, best_seq, val, val_sum, seq: [best_val, best_sum, best_seq]
         num_prev_elites_per_iter = max(int(self.opt_params.elite_set_fraction * self.opt_params.num_elites), 1)
 
         def step(carry: ICemCarry, ins):
@@ -314,8 +319,9 @@ class iCemTO(BaseOptimizer):
             action_samples = jnp.concatenate([action_samples, prev_elites], axis=0)
 
             # Calculate objective for all the samples
-            values = jax.vmap(objective)(action_samples, particles_rng)
+            values, value_sums = jax.vmap(objective)(action_samples, particles_rng)
             assert values.shape == (self.opt_params.num_samples + num_prev_elites_per_iter,)
+            assert value_sums.shape == (self.opt_params.num_samples + num_prev_elites_per_iter,)
 
             # Prepare indices of elite samples (i.e. samples with the highest reward)
             best_elite_idx = jnp.argsort(values, axis=0)[-self.opt_params.num_elites:]
@@ -323,6 +329,7 @@ class iCemTO(BaseOptimizer):
             # Take elite actions and their values
             elites = action_samples[best_elite_idx]
             elite_values = values[best_elite_idx]
+            elite_value_sums = value_sums[best_elite_idx]
 
             # Compute mean and var of elites actions
             elite_mean = jnp.mean(elites, axis=0)
@@ -341,20 +348,23 @@ class iCemTO(BaseOptimizer):
                                  get_best_action,
                                  get_curr_best_action,
                                  carry.best_value,
+                                 carry.best_objective_sum,
                                  carry.best_sequence,
                                  elite_values,
+                                 elite_value_sums,
                                  elites)
-            best_val, best_seq = bests[0], bests[-1]
-            outs = [best_val, best_seq]
+            best_val, best_objective_sum, best_seq = bests[0], bests[1], bests[-1]
+            outs = [best_val, best_objective_sum, best_seq]
 
             # Take only num_prev_elites_per_iter elites to the next iteration
             elite_set = elites[-num_prev_elites_per_iter:]
 
-            carry = ICemCarry(key=key, mean=mean, std=std, best_value=best_val, best_sequence=best_seq,
-                              prev_elites=elite_set)
+            carry = ICemCarry(key=key, mean=mean, std=std, best_value=best_val,
+                              best_objective_sum=best_objective_sum, best_sequence=best_seq, prev_elites=elite_set)
             return carry, outs
 
         best_value = -jnp.inf
+        best_objective_sum = -jnp.inf
         mean = jnp.zeros(self.opt_dim)
 
         # If we warm start the optimization we shift the action sequence for one and repeat the last action
@@ -367,10 +377,13 @@ class iCemTO(BaseOptimizer):
         prev_elites = jnp.zeros((num_prev_elites_per_iter,) + self.opt_dim)
         optimizer_key, key = jax.random.split(opt_state.key, 2)
         new_opt_state = opt_state.replace(key=key)
-        carry = ICemCarry(key=optimizer_key, mean=mean, std=std, best_value=best_value, best_sequence=best_sequence,
+        carry = ICemCarry(key=optimizer_key, mean=mean, std=std, best_value=best_value,
+                          best_objective_sum=best_objective_sum, best_sequence=best_sequence,
                           prev_elites=prev_elites)
         carry, outs = jax.lax.scan(step, carry, xs=None, length=self.opt_params.num_steps)
-        new_opt_state = new_opt_state.replace(best_sequence=outs[1][-1, ...], best_reward=outs[0][-1, ...])
+        new_opt_state = new_opt_state.replace(best_sequence=outs[2][-1, ...],
+                                              best_reward=outs[0][-1, ...],
+                                              best_objective_sum=outs[1][-1, ...])
         return new_opt_state
 
     @partial(jax.jit, static_argnums=0)

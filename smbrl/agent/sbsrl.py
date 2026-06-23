@@ -205,6 +205,7 @@ class SBSRLAgent(SafeModelBasedAgent):
         self.uncertainty_constraint_enabled = True
         self.latest_uncertainty_penalty_mean = 0.0
         self._sbsrl_reward: SBSRLReward | None = None
+        self.enable_additional_exploration_optimizer = True
 
     def get_episode_wandb_metrics(self, episode_idx: int) -> dict:
         return {
