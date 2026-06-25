@@ -303,11 +303,13 @@ class SafeModelBasedAgent:
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
             print(f'Step {i}: reward is {optimizer_state.best_reward}')
+            old_state = env_state.obs
             for _ in range(self.action_repeat):
+                old_state = env_state.obs
                 env_state = self.env.step(env_state, action)
                 extrinsic_rewards.append(env_state.reward)
             # Calculate intrinsic reward
-            z = jnp.concatenate([env_state.obs, action])
+            z = jnp.concatenate([old_state, action])
             pred = self.model(z, model_state)
             epistemic_std, aleatoric_std = pred.epistemic_std, pred.aleatoric_std
             intrinsic_reward = learned_system.dynamics.get_intrinsic_reward(epistemic_std=epistemic_std,
