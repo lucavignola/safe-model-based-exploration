@@ -345,7 +345,8 @@ class SafeModelBasedAgent:
                    key: Key[Array, '2'],
                    save_agent: bool = True,
                    train_model: bool = True,
-                   folder_name: str = 'experiment_2024'
+                   folder_name: str = 'experiment_2024',
+                   recurrent_metrics: dict | None = None,
                    ) -> (ModelState, Data):
         if train_model:
             # If we collected some data already then we train dynamics model and the policy
@@ -386,10 +387,13 @@ class SafeModelBasedAgent:
             }
             if additional_opt is not None:
                 additional_opt_value = additional_opt.item()
+                recurrent_metrics['cum_intrinsic_rewards_sum'] += intrinsic_rewards_sum
+                recurrent_metrics['cum_additional_opt_value'] += additional_opt_value
                 metrics['additional_opt'] = additional_opt_value
                 metrics['additional_opt_intrinsic_rewards_ratio'] = (
                     additional_opt_value / intrinsic_rewards_sum if intrinsic_rewards_sum != 0 else float('inf')
                 )
+                metrics['cumulative_intrinsic_rewards_ratio'] = recurrent_metrics['cum_additional_opt_value'] / recurrent_metrics['cum_intrinsic_rewards_sum'] if recurrent_metrics['cum_intrinsic_rewards_sum'] != 0 else float('inf')
             if hasattr(self, 'action_cost'):
                 action_tolerance = ToleranceReward(bounds=(-0.1, 0.1), margin=0.1, sigmoid='gaussian')
                 action_penalty = getattr(self, 'action_cost') * jnp.sum(1 - action_tolerance(exploration_actions))
@@ -463,7 +467,7 @@ class SafeModelBasedAgent:
 
             wandb.save(os.path.join(folder_name, 'task_outputs.pkl'), wandb.run.dir)
 
-        return model_state, data
+        return model_state, data, recurrent_metrics
 
     def run_episodes(self,
                      num_episodes: int,
@@ -477,20 +481,24 @@ class SafeModelBasedAgent:
             data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size + self.env.action_size)),
                         outputs=jnp.zeros(shape=(0, self.env.observation_size)))
             train_model = False
-
+        recurrent_metrics = {
+            'cum_intrinsic_rewards_sum': 0.0,
+            'cum_additional_opt_value': 0.0,
+        }
         for episode_idx in range(num_episodes):
             key, subkey = jr.split(key)
             train_model = train_model or episode_idx > 0
             self.current_episode_idx = episode_idx
             print(f'Starting with Episode {episode_idx}')
             save_agent = episode_idx % self.saving_frequency == 0
-            model_state, data = self.do_episode(model_state=model_state,
+            model_state, data, recurrent_metrics = self.do_episode(model_state=model_state,
                                                 episode_idx=episode_idx,
                                                 data=data,
                                                 key=subkey,
                                                 train_model=train_model,
                                                 save_agent=save_agent,
-                                                folder_name=folder_name)
+                                                folder_name=folder_name,
+                                                recurrent_metrics=recurrent_metrics)
             self.on_episode_end(episode_idx)
             print(f'End of Episode {episode_idx}')
         return model_state, data
