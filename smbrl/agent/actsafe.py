@@ -252,6 +252,8 @@ class SafeModelBasedAgent:
         exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
                                                    u_dim=self.env.action_size,
                                                    model=self.model,
+                                                   use_log=False,
+                                                   scale_with_aleatoric_std=False,
                                                    use_mean_dynamics=self.use_mean_dynamics,
                                                    aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
                                                    )
