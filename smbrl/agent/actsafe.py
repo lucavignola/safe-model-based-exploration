@@ -221,6 +221,7 @@ class SafeModelBasedAgent:
             cost_fn=None,
             use_optimism=True,
             use_pessimism=self.use_pessimism,
+            action_repeat=self.action_repeat,
         )
 
         key, init_key = jr.split(key)

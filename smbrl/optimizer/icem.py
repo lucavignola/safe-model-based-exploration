@@ -165,7 +165,7 @@ class iCemParams(NamedTuple):
     num_steps: int = 5
     exponent: float = 0.0
     elite_set_fraction: float = 0.3
-    u_min: float | chex.Array = -1.0
+    u_min: float | chex.Array = -1.0 #TODO: check these are correctly updated depending on the experiment
     u_max: float | chex.Array = 1.0
     warm_start: bool = True
     lambda_constraint: float = 1e4
@@ -220,6 +220,7 @@ class iCemTO(BaseOptimizer):
                  use_optimism: bool = True,
                  use_pessimism: bool = True,
                  system=None,
+                 action_repeat: int = 1,
                  *args,
                  **kwargs):
         # Store the system which is needed by the init method
@@ -231,6 +232,7 @@ class iCemTO(BaseOptimizer):
         self.action_dim = action_dim
         self.horizon = horizon
         self.cost_fn = cost_fn
+        self.action_repeat = action_repeat
         if use_optimism:
             self.summarize_raw_samples = jnp.max
         else:
@@ -274,6 +276,7 @@ class iCemTO(BaseOptimizer):
                                        init_state=init_state,
                                        horizon=self.horizon,
                                        actions=seq,
+                                       action_repeat=self.action_repeat,
                                        )
 
             particles_rng = jr.split(key, self.opt_params.num_particles)
@@ -284,7 +287,7 @@ class iCemTO(BaseOptimizer):
             reward_samples = jnp.mean(transitions.reward, axis=-1)
             reward = self.summarize_raw_samples(reward_samples)
             reward_sum = self.summarize_raw_samples(jnp.sum(transitions.reward, axis=-1))
-            
+
             if self.cost_fn is not None:
                 cost = vmap(self.cost_fn)(transitions.observation, transitions.action)
                 assert cost.shape == (self.opt_params.num_particles,)
