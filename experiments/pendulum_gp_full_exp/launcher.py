@@ -43,6 +43,7 @@ _applicable_configs = {
     'log_wandb': [1],
     'use_mean_dynamics': [True],
     'aleatoric_noise_in_prediction': [True],
+    'sparse_task': [False],
 }
 
 num_particles = [10]

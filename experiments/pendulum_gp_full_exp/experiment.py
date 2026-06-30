@@ -4,7 +4,7 @@ import sys
 
 import numpy as np
 
-from smbrl.utils.experiment_utils import Logger, hash_dict
+from smbrl.utils.experiment_utils import Logger, hash_dict, tolerance
 
 
 def experiment(
@@ -25,6 +25,7 @@ def experiment(
         action_repeat: int = 2,
         max_abs_velocity: float = 6.0,
         action_cost: float = 0.0,
+        sparse_task: bool = False,
         num_training_steps: int = 1_000,
         env_margin_factor: float = 10.0,
         process_noise_scale: float = 1e-3,
@@ -124,6 +125,7 @@ def experiment(
         action_repeat=action_repeat,
         max_abs_velocity=max_abs_velocity,
         action_cost=action_cost,
+        sparse_task=sparse_task,
         num_training_steps=num_training_steps,
         env_margin_factor=env_margin_factor,
         process_noise_scale=process_noise_scale,
@@ -166,9 +168,11 @@ def experiment(
         target_angle: chex.Array = struct.field(default_factory=lambda: jnp.array(0.0))
 
     class PendulumReward(Reward):
-        def __init__(self, target_angle: float = 0.0):
+        def __init__(self, target_angle: float = 0.0, action_cost: float = 0.0, sparse_task: bool = False):
             super().__init__(x_dim=3, u_dim=1)
             self.target_angle = jnp.array(target_angle)
+            self.action_cost = action_cost
+            self.sparse_task = sparse_task
 
         def __call__(self,
                      x: chex.Array,
@@ -183,8 +187,10 @@ def experiment(
             target_angle = reward_params.target_angle
             diff_th = theta - target_angle
             diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
-            reward = -(reward_params.angle_cost * diff_th ** 2 +
-                       0.1 * omega ** 2) - reward_params.control_cost * u ** 2
+            if self.sparse_task:
+                reward = tolerance(jnp.cos(theta), (0.95, 1), 0.1)*tolerance(omega, (-0.5, 0.5), 0.5) - self.action_cost * (1 - tolerance(u, (-0.1, 0.1), 0.1))
+            else:
+                reward = -(reward_params.angle_cost * diff_th ** 2 + 0.1 * omega ** 2) - reward_params.control_cost * u ** 2
             reward = reward.squeeze()
             return Normal(loc=reward, scale=jnp.zeros_like(reward)), reward_params
 
@@ -236,7 +242,7 @@ def experiment(
         'cost_fn': cost_fn,
         'test_tasks': [
             #Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
-            Task(reward=PendulumReward(), name='Swing up', env=true_env),
+            Task(reward=PendulumReward(action_cost=action_cost, sparse_task=sparse_task), name='Swing up', env=true_env),
         ],
         'predict_difference': True,
         'num_training_steps': constant_schedule(num_training_steps),
@@ -252,7 +258,7 @@ def experiment(
     # Add SBSRL-specific parameters if needed
     if alg_name == 'SBSRL':
         agent_kwargs.update({
-            'action_cost': action_cost,
+            'action_cost': 0.0,  # Already included in the reward function
             'lambda_sigma': lambda_sigma,
             'uncertainty_eps': uncertainty_eps,
             'uncertainty_decay_factor': uncertainty_decay_factor,
@@ -377,6 +383,7 @@ def main(args):
         beta=args.beta,
         lambda_sigma=args.lambda_sigma,
         action_cost=args.action_cost,
+        sparse_task=args.sparse_task,
         uncertainty_eps=args.uncertainty_eps,
         uncertainty_decay_factor=args.uncertainty_decay_factor,
         uncertainty_decay_mode=args.uncertainty_decay_mode,
@@ -423,6 +430,7 @@ if __name__ == '__main__':
     parser.add_argument('--beta', type=float, default=3.0)
     parser.add_argument('--use_mean_dynamics', action='store_true')
     parser.add_argument('--aleatoric_noise_in_prediction', action='store_true')
+    parser.add_argument('--sparse_task', action='store_true')
 
     # SBSRL-specific parameters
     parser.add_argument('--lambda_sigma', type=float, default=1.0, help='Weight for exploration penalty in SBSRL')
