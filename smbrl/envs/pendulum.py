@@ -9,6 +9,7 @@ from flax import struct
 from jaxtyping import Float, Array
 
 from smbrl.utils.tolerance_reward import ToleranceReward
+from smbrl.utils.experiment_utils import tolerance
 
 
 @chex.dataclass
@@ -33,7 +34,8 @@ class PendulumEnv(Env):
                  reward_source: str = 'gym',
                  add_process_noise: bool = False,
                  margin_factor: float = 10.0,
-                 process_noise_scale: Float[Array, "observation_dim"] | None = None):
+                 process_noise_scale: Float[Array, "observation_dim"] | None = None,
+                 action_cost: float = 0.0):
         self.dynamics_params = PendulumDynamicsParams()
         self.reward_params = PendulumRewardParams()
         bound = 0.1
@@ -46,6 +48,7 @@ class PendulumEnv(Env):
                                                 sigmoid='long_tail')
         self.add_process_noise = add_process_noise
         self.process_noise_scale = process_noise_scale
+        self.action_cost = action_cost
 
     def reset(self,
               rng: jax.Array) -> State:
@@ -81,6 +84,17 @@ class PendulumEnv(Env):
         reward = reward.squeeze()
         return reward
 
+    def sparse_reward(self,
+                      x: Float[Array, 'observation_dim'],
+                      u: Float[Array, 'action_dim']) -> Float[Array, 'None']:
+        theta, omega = jnp.arctan2(x[1], x[0]), x[-1]
+        target_angle = self.reward_params.target_angle
+        diff_th = theta - target_angle
+        diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
+        reward = tolerance(jnp.cos(theta), (0.95, 1), 0.1)*tolerance(omega, (-0.5, 0.5), 0.5) - self.action_cost * (1 - tolerance(u, (-0.1, 0.1), 0.1))
+        reward = reward.squeeze()
+        return reward
+
     @partial(jax.jit, static_argnums=0)
     def step(self,
              state: State,
@@ -108,6 +122,8 @@ class PendulumEnv(Env):
             next_reward = self.reward(x, action)
         elif self.reward_source == 'dm-control':
             next_reward = self.dm_reward(x, action)
+        elif self.reward_source == 'sparse':
+            next_reward = self.sparse_reward(x, action)
         else:
             raise NotImplementedError(f'Unknown reward source {self.reward_source}')
 

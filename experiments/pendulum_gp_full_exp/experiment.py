@@ -231,7 +231,8 @@ def experiment(
     true_env = PendulumEnv(margin_factor=env_margin_factor,
                            reward_source=reward_source,
                            add_process_noise=True,
-                           process_noise_scale=true_env_process_noise_scale)
+                           process_noise_scale=true_env_process_noise_scale,
+                           action_cost=action_cost,)
 
     # Create agent with appropriate parameters
     agent_kwargs = {
