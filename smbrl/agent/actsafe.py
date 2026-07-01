@@ -502,6 +502,14 @@ class SafeModelBasedAgent:
             data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size + self.env.action_size)),
                         outputs=jnp.zeros(shape=(0, self.env.observation_size)))
             train_model = False
+
+            if self.prior_knowledge == "none":
+                data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size + self.env.action_size)),
+                        outputs=jnp.zeros(shape=(0, self.env.observation_size)))
+            elif self.prior_knowledge == "pendulum":
+                data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size)),
+                        outputs=jnp.zeros(shape=(0, self.env.observation_size)))
+
         recurrent_metrics = {
             'cum_intrinsic_rewards_sum': 0.0,
             'cum_additional_opt_value': 0.0,
