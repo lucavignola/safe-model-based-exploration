@@ -12,6 +12,7 @@ from mbpo.systems.base_systems import SystemParams, SystemState, System
 from mbpo.systems.dynamics.base_dynamics import Dynamics
 from mbpo.systems.dynamics.base_dynamics import DynamicsParams as DummyDynamicsParams
 from mbpo.systems.rewards.base_rewards import Reward, RewardParams
+from smbrl.envs.pendulum import PendulumDynamicsParams
 
 
 @chex.dataclass
@@ -30,6 +31,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                  aleatoric_noise_in_prediction: bool = True,
                  predict_difference: bool = True,
                  use_mean_dynamics: bool = False,
+                 prior_knowledge: str = "none",
                  ):
         Dynamics.__init__(self, x_dim=x_dim, u_dim=u_dim)
         self.model = model
@@ -38,6 +40,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         self.aleatoric_noise_in_prediction = aleatoric_noise_in_prediction
         self.predict_difference = predict_difference
         self.use_mean_dynamics = use_mean_dynamics
+        self.prior_knowledge = prior_knowledge
 
     def init_params(self, key: chex.PRNGKey) -> DynamicsParams:
         param_key, model_state_key = jr.split(key, 2)
@@ -67,7 +70,14 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         # Create state-action pair
         z = jnp.concatenate([x, u])
         next_key, key_sample_x_next = jr.split(dynamics_params.key)
-        pred = self.model(z, dynamics_params.model_state)
+        if self.prior_knowledge == "none":
+            pred = self.model(z, dynamics_params.model_state)
+            known_action_effect = jnp.zeros_like(x)
+        elif self.prior_knowledge == "pendulum":
+            pred = self.model(x, dynamics_params.model_state)
+            known_action_effect = self.pendulum_prior(x, u, self.predict_difference)
+        else:
+            raise NotImplementedError(f'Unknown prior knowledge {self.prior_knowledge}')
         epistemic_std, aleatoric_std = pred.epistemic_std, pred.aleatoric_std
         beta = pred.statistical_model_state.beta
         x_next = x
@@ -81,7 +91,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                 x_next = pred.mean
             else:
                 x_next = pred.mean + beta * epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
-
+        x_next += known_action_effect
         intrinsic_reward = self.get_intrinsic_reward(epistemic_std, aleatoric_std)
         intrinsic_reward = jnp.atleast_1d(intrinsic_reward)
 
@@ -92,6 +102,44 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         aleatoric_std_with_reward = jnp.concatenate([aleatoric_std, jnp.zeros_like(intrinsic_reward)], axis=-1)
         new_dynamics_params = dynamics_params.replace(key=next_key)
         return Normal(loc=x_next_with_reward, scale=aleatoric_std_with_reward), new_dynamics_params
+
+    def pendulum_prior(self, x: chex.Array, u: chex.Array, predict_difference: bool) -> chex.Array:
+        return pendulum_known_action_effect(x, u, predict_difference)
+
+
+def pendulum_deterministic_next_state(x: chex.Array,
+                                      u: chex.Array,
+                                      dynamics_params: PendulumDynamicsParams | None = None) -> chex.Array:
+    chex.assert_shape(x, (3,))
+    chex.assert_shape(u, (1,))
+    if dynamics_params is None:
+        dynamics_params = PendulumDynamicsParams()
+
+    th = jnp.arctan2(x[1], x[0])
+    thdot = x[-1]
+    dt = dynamics_params.dt
+    torque = jnp.clip(u[0], -1.0, 1.0) * dynamics_params.max_torque
+
+    thddot = (
+        3.0 * dynamics_params.g / (2.0 * dynamics_params.l) * jnp.sin(th)
+        + 3.0 / (dynamics_params.m * dynamics_params.l ** 2) * torque
+    )
+    newthdot = thdot + thddot * dt
+    newthdot = jnp.clip(newthdot, -dynamics_params.max_speed, dynamics_params.max_speed)
+    newth = th + newthdot * dt
+    return jnp.asarray([jnp.cos(newth), jnp.sin(newth), newthdot]).reshape(-1)
+
+def pendulum_known_action_effect(x: chex.Array,
+                                 u: chex.Array,
+                                 predict_difference: bool = True,
+                                 dynamics_params: PendulumDynamicsParams | None = None) -> chex.Array:
+    action_next_state = pendulum_deterministic_next_state(x, u, dynamics_params)
+    passive_next_state = pendulum_deterministic_next_state(x, jnp.zeros_like(u), dynamics_params)
+    action_effect = action_next_state - passive_next_state
+    if predict_difference:
+        return action_effect
+    return action_effect
+
 
 
 @chex.dataclass

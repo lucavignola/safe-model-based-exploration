@@ -22,6 +22,7 @@ from smbrl.mbpo_stubs import Reward, RewardParams
 from optax import Schedule, constant_schedule
 
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
+from smbrl.model_based_rl.active_exploration_system import pendulum_known_action_effect
 from smbrl.optimizer.icem import iCemParams, iCemTO, AbstractCost
 # from smbrl.optimizer.ipopt_optimizer import IPOPTOptimizer, IPOPTParams
 from smbrl.utils.tolerance_reward import ToleranceReward
@@ -56,6 +57,7 @@ class SafeModelBasedAgent:
                  optimizer: str = 'icem',  # can be 'icem' or 'ipopt'
                  use_mean_dynamics: bool = False,
                  aleatoric_noise_in_prediction: bool = True,
+                 prior_knowledge: str = "none",
                  ):
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
@@ -87,6 +89,7 @@ class SafeModelBasedAgent:
         self.ipopt_params = ipopt_params
         self.use_mean_dynamics = use_mean_dynamics
         self.aleatoric_noise_in_prediction = aleatoric_noise_in_prediction
+        self.prior_knowledge = prior_knowledge
         self.enable_additional_exploration_optimizer = False
 
     def train_dynamics_model(self,
@@ -107,6 +110,7 @@ class SafeModelBasedAgent:
                                                    model=self.model,
                                                    use_mean_dynamics=self.use_mean_dynamics,
                                                    aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
+                                                   prior_knowledge=self.prior_knowledge,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -202,6 +206,7 @@ class SafeModelBasedAgent:
             scale_with_aleatoric_std=False,
             use_mean_dynamics=False,
             aleatoric_noise_in_prediction=True,
+            prior_knowledge=self.prior_knowledge,
         )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -256,6 +261,7 @@ class SafeModelBasedAgent:
                                                    scale_with_aleatoric_std=False,
                                                    use_mean_dynamics=self.use_mean_dynamics,
                                                    aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
+                                                   prior_knowledge=self.prior_knowledge,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -309,8 +315,13 @@ class SafeModelBasedAgent:
                 env_state = self.env.step(env_state, action)
                 extrinsic_rewards.append(env_state.reward)
             # Calculate intrinsic reward
-            z = jnp.concatenate([old_state, action])
-            pred = self.model(z, model_state)
+            if self.prior_knowledge == "none":
+                model_input = jnp.concatenate([old_state, action])
+            elif self.prior_knowledge == "pendulum":
+                model_input = old_state
+            else:
+                raise NotImplementedError(f'Unknown prior knowledge {self.prior_knowledge}')
+            pred = self.model(model_input, model_state)
             epistemic_std, aleatoric_std = pred.epistemic_std, pred.aleatoric_std
             intrinsic_reward = learned_system.dynamics.get_intrinsic_reward(epistemic_std=epistemic_std,
                                                                             aleatoric_std=aleatoric_std)
@@ -331,11 +342,21 @@ class SafeModelBasedAgent:
         # TODO: Isn't this wrong, if we have a done flag in collected_states?
         states = collected_states.obs[:-1]
         next_states = collected_states.obs[1:]
-        inputs = jnp.concatenate([states, actions], axis=-1)
-        if self.predict_difference:
-            outputs = next_states - states
+        if self.prior_knowledge == "none":
+            inputs = jnp.concatenate([states, actions], axis=-1)
+            known_action_effect = 0.0
+        elif self.prior_knowledge == "pendulum":
+            inputs = states
+            known_action_effect = jax.vmap(
+                pendulum_known_action_effect,
+                in_axes=(0, 0, None),
+            )(states, actions, self.predict_difference)
         else:
-            outputs = next_states
+            raise NotImplementedError(f'Unknown prior knowledge {self.prior_knowledge}')
+        if self.predict_difference:
+            outputs = next_states - states - known_action_effect
+        else:
+            outputs = next_states - known_action_effect
         return Data(inputs=inputs, outputs=outputs)
 
     def do_episode(self,

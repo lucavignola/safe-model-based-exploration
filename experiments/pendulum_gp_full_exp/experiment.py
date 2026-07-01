@@ -49,11 +49,13 @@ def experiment(
         wandb_notes: str = None,
         use_mean_dynamics: bool = False,
         aleatoric_noise_in_prediction: bool = True,
+        prior_knowledge: str = "none",
 ):
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
 
+    import jax
     import jax.random as jr
     import jax.numpy as jnp
     import chex
@@ -68,6 +70,7 @@ def experiment(
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.pendulum import PendulumEnv
+    from smbrl.model_based_rl.active_exploration_system import pendulum_known_action_effect
     from smbrl.playground.pendulum_icem import VelocityBound
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
@@ -75,6 +78,9 @@ def experiment(
     from mbrl.utils.offline_data import OfflineData
 
     env = PendulumEnv()
+    if prior_knowledge not in ("none", "pendulum"):
+        raise NotImplementedError(f'Unknown prior knowledge {prior_knowledge}')
+    model_input_dim = env.observation_size + env.action_size if prior_knowledge == "none" else env.observation_size
 
     key = jr.PRNGKey(seed)
     key, offline_data_key = jr.split(key, 2)
@@ -105,8 +111,19 @@ def experiment(
         offline_data_gen = PendulumOfflineData(env=env, max_velocity=max_abs_velocity)
         transitions = offline_data_gen.sample_transitions(key=offline_data_key,
                                                           num_samples=num_offline_data)
-        offline_data = Data(inputs=jnp.concatenate([transitions.observation, transitions.action], axis=-1),
-                            outputs=transitions.next_observation - transitions.observation, )
+        if prior_knowledge == "none":
+            offline_inputs = jnp.concatenate([transitions.observation, transitions.action], axis=-1)
+            offline_outputs = transitions.next_observation - transitions.observation
+        elif prior_knowledge == "pendulum":
+            offline_inputs = transitions.observation
+            known_action_effect = jax.vmap(
+                pendulum_known_action_effect,
+                in_axes=(0, 0, None),
+            )(transitions.observation, transitions.action, True)
+            offline_outputs = transitions.next_observation - transitions.observation - known_action_effect
+        else:
+            raise NotImplementedError(f'Unknown prior knowledge {prior_knowledge}')
+        offline_data = Data(inputs=offline_inputs, outputs=offline_outputs)
     else:
         offline_data = None
 
@@ -147,11 +164,12 @@ def experiment(
         wandb_notes=wandb_notes,  # Add to config for visibility
         use_mean_dynamics=use_mean_dynamics,
         aleatoric_noise_in_prediction=aleatoric_noise_in_prediction,
+        prior_knowledge=prior_knowledge,
     )
 
     model = GPStatisticalModel(
-        kernel=ARD(input_dim=env.observation_size + env.action_size, length_scale=0.1),
-        input_dim=env.observation_size + env.action_size,
+        kernel=ARD(input_dim=model_input_dim, length_scale=0.1),
+        input_dim=model_input_dim,
         output_dim=env.observation_size,
         output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
         logging_wandb=log_wandb,
@@ -254,6 +272,7 @@ def experiment(
         'use_optimism': use_optimism,
         'use_mean_dynamics': use_mean_dynamics,
         'aleatoric_noise_in_prediction': aleatoric_noise_in_prediction,
+        'prior_knowledge': prior_knowledge,
     }
 
     # Add SBSRL-specific parameters if needed
@@ -394,6 +413,7 @@ def main(args):
         wandb_notes=args.wandb_notes,
         use_mean_dynamics=args.use_mean_dynamics,
         aleatoric_noise_in_prediction=args.aleatoric_noise_in_prediction,
+        prior_knowledge=args.prior_knowledge,
     )
 
 
@@ -432,6 +452,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_mean_dynamics', action='store_true')
     parser.add_argument('--aleatoric_noise_in_prediction', action='store_true')
     parser.add_argument('--sparse_task', action='store_true')
+    parser.add_argument('--prior_knowledge', type=str, default='none', choices=['none', 'pendulum'])
 
     # SBSRL-specific parameters
     parser.add_argument('--lambda_sigma', type=float, default=1.0, help='Weight for exploration penalty in SBSRL')
