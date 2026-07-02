@@ -28,6 +28,9 @@ class PendulumRewardParams:
     angle_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(1.0))
     target_angle: chex.Array = struct.field(default_factory=lambda: jnp.array(0.0))
 
+def sparse_reward_function(theta, omega, u, action_cost):
+    reward = tolerance(jnp.cos(theta), (0.5, 1), 0.1)*tolerance(omega, (-0.5, 0.5), 0.5) - action_cost * (1 - tolerance(u, (-0.5, 0.5), 0.1))
+    return reward
 
 class PendulumEnv(Env):
     def __init__(self,
@@ -91,7 +94,7 @@ class PendulumEnv(Env):
         target_angle = self.reward_params.target_angle
         diff_th = theta - target_angle
         diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
-        reward = tolerance(jnp.cos(theta), (0.95, 1), 0.1)*tolerance(omega, (-0.5, 0.5), 0.5) - self.action_cost * (1 - tolerance(u, (-0.1, 0.1), 0.1))
+        reward = sparse_reward_function(theta, omega, u, self.action_cost)
         reward = reward.squeeze()
         return reward
 

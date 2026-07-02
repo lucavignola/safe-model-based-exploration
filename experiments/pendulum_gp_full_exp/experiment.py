@@ -5,6 +5,7 @@ import sys
 import numpy as np
 
 from smbrl.utils.experiment_utils import Logger, hash_dict, tolerance
+from smbrl.envs.pendulum import sparse_reward_function
 
 
 def experiment(
@@ -206,7 +207,7 @@ def experiment(
             diff_th = theta - target_angle
             diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
             if self.sparse_task:
-                reward = tolerance(jnp.cos(theta), (0.95, 1), 0.1)*tolerance(omega, (-0.5, 0.5), 0.5) - self.action_cost * (1 - tolerance(u, (-0.1, 0.1), 0.1))
+                reward = sparse_reward_function(theta, omega, u, self.action_cost)
             else:
                 reward = -(reward_params.angle_cost * diff_th ** 2 + 0.1 * omega ** 2) - reward_params.control_cost * u ** 2
             reward = reward.squeeze()
@@ -343,7 +344,7 @@ def experiment(
     #     )
     #    print('model state after update: ', model_state)
 
-    agent.run_episodes(num_episodes=10,
+    agent.run_episodes(num_episodes=15,
                        key=key,
                        model_state=model_state,
                        folder_name=f'{logs_dir}/{alg_name}/{exp_hash}/',

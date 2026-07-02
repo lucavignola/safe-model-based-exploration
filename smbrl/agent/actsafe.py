@@ -224,7 +224,7 @@ class SafeModelBasedAgent:
             opt_params=self.icem_params,
             system=learned_system,
             cost_fn=None,
-            use_optimism=True,
+            use_optimism=False,
             use_pessimism=self.use_pessimism,
             action_repeat=self.action_repeat,
         )
