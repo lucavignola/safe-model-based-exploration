@@ -32,6 +32,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                  predict_difference: bool = True,
                  use_mean_dynamics: bool = False,
                  prior_knowledge: str = "none",
+                 prior_num_steps: int = 1,
                  ):
         Dynamics.__init__(self, x_dim=x_dim, u_dim=u_dim)
         self.model = model
@@ -41,6 +42,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         self.predict_difference = predict_difference
         self.use_mean_dynamics = use_mean_dynamics
         self.prior_knowledge = prior_knowledge
+        self.prior_num_steps = prior_num_steps
 
     def init_params(self, key: chex.PRNGKey) -> DynamicsParams:
         param_key, model_state_key = jr.split(key, 2)
@@ -104,7 +106,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         return Normal(loc=x_next_with_reward, scale=aleatoric_std_with_reward), new_dynamics_params
 
     def pendulum_prior(self, x: chex.Array, u: chex.Array, predict_difference: bool) -> chex.Array:
-        return pendulum_known_action_effect(x, u, predict_difference)
+        return pendulum_known_action_effect(x, u, predict_difference, self.prior_num_steps)
 
 
 def pendulum_deterministic_next_state(x: chex.Array,
@@ -132,9 +134,13 @@ def pendulum_deterministic_next_state(x: chex.Array,
 def pendulum_known_action_effect(x: chex.Array,
                                  u: chex.Array,
                                  predict_difference: bool = True,
+                                 num_steps: int = 1,
                                  dynamics_params: PendulumDynamicsParams | None = None) -> chex.Array:
-    action_next_state = pendulum_deterministic_next_state(x, u, dynamics_params)
-    passive_next_state = pendulum_deterministic_next_state(x, jnp.zeros_like(u), dynamics_params)
+    action_next_state = x
+    passive_next_state = x
+    for _ in range(num_steps):
+        action_next_state = pendulum_deterministic_next_state(action_next_state, u, dynamics_params)
+        passive_next_state = pendulum_deterministic_next_state(passive_next_state, jnp.zeros_like(u), dynamics_params)
     action_effect = action_next_state - passive_next_state
     if predict_difference:
         return action_effect

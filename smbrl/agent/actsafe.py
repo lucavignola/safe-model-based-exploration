@@ -111,6 +111,7 @@ class SafeModelBasedAgent:
                                                    use_mean_dynamics=self.use_mean_dynamics,
                                                    aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
                                                    prior_knowledge=self.prior_knowledge,
+                                                   prior_num_steps=self.action_repeat,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -207,6 +208,7 @@ class SafeModelBasedAgent:
             use_mean_dynamics=False,
             aleatoric_noise_in_prediction=True,
             prior_knowledge=self.prior_knowledge,
+            prior_num_steps=self.action_repeat,
         )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -226,7 +228,6 @@ class SafeModelBasedAgent:
             cost_fn=None,
             use_optimism=False,
             use_pessimism=self.use_pessimism,
-            action_repeat=self.action_repeat,
         )
 
         key, init_key = jr.split(key)
@@ -251,7 +252,7 @@ class SafeModelBasedAgent:
                              key: Key[Array, '2'], ) -> Tuple[
         PyTree[Array, 'episode_length ...'], Float[Array, 'episode_length action_dim'], Float[
             Array, 'episode_length 1'], Float[
-            Array, 'episode_length 1'], Float[Array, '1']]:
+            Array, 'episode_length 1'], Float[Array, '1'], Data]:
         reward = self.get_train_rewards()
 
         exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
@@ -262,6 +263,7 @@ class SafeModelBasedAgent:
                                                    use_mean_dynamics=self.use_mean_dynamics,
                                                    aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
                                                    prior_knowledge=self.prior_knowledge,
+                                                   prior_num_steps=self.action_repeat,
                                                    )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
@@ -309,6 +311,7 @@ class SafeModelBasedAgent:
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
             print(f'Step {i}: reward is {optimizer_state.best_reward}')
+            decision_state = env_state.obs
             old_state = env_state.obs
             for _ in range(self.action_repeat):
                 old_state = env_state.obs
@@ -316,9 +319,9 @@ class SafeModelBasedAgent:
                 extrinsic_rewards.append(env_state.reward)
             # Calculate intrinsic reward
             if self.prior_knowledge == "none":
-                model_input = jnp.concatenate([old_state, action])
+                model_input = jnp.concatenate([decision_state, action])
             elif self.prior_knowledge == "pendulum":
-                model_input = old_state
+                model_input = decision_state
             else:
                 raise NotImplementedError(f'Unknown prior knowledge {self.prior_knowledge}')
             pred = self.model(model_input, model_state)
@@ -334,14 +337,13 @@ class SafeModelBasedAgent:
         intrinsic_rewards = jt.map(lambda *xs: jnp.stack(xs), *intrinsic_rewards)
         extrinsic_rewards = jt.map(lambda *xs: jnp.stack(xs), *extrinsic_rewards)
         costs = self.cost_fn_env(collected_states.obs[:-1], actions)
-        return collected_states, actions, intrinsic_rewards, extrinsic_rewards, costs
+        model_data = self.from_collected_transitions_to_data(collected_states, actions)
+        return collected_states, actions, intrinsic_rewards, extrinsic_rewards, costs, model_data
 
-    def from_collected_transitions_to_data(self,
-                                           collected_states: PyTree[Array, 'episode_length ...'],
-                                           actions: Float[Array, 'episode_length action_dim']) -> Data:
-        # TODO: Isn't this wrong, if we have a done flag in collected_states?
-        states = collected_states.obs[:-1]
-        next_states = collected_states.obs[1:]
+    def from_transitions_to_data(self,
+                                 states: Float[Array, 'num_transitions observation_dim'],
+                                 actions: Float[Array, 'num_transitions action_dim'],
+                                 next_states: Float[Array, 'num_transitions observation_dim']) -> Data:
         if self.prior_knowledge == "none":
             inputs = jnp.concatenate([states, actions], axis=-1)
             known_action_effect = 0.0
@@ -349,8 +351,8 @@ class SafeModelBasedAgent:
             inputs = states
             known_action_effect = jax.vmap(
                 pendulum_known_action_effect,
-                in_axes=(0, 0, None),
-            )(states, actions, self.predict_difference)
+                in_axes=(0, 0, None, None),
+            )(states, actions, self.predict_difference, self.action_repeat)
         else:
             raise NotImplementedError(f'Unknown prior knowledge {self.prior_knowledge}')
         if self.predict_difference:
@@ -358,6 +360,14 @@ class SafeModelBasedAgent:
         else:
             outputs = next_states - known_action_effect
         return Data(inputs=inputs, outputs=outputs)
+
+    def from_collected_transitions_to_data(self,
+                                           collected_states: PyTree[Array, 'episode_length ...'],
+                                           actions: Float[Array, 'episode_length action_dim']) -> Data:
+        # TODO: Isn't this wrong, if we have a done flag in collected_states?
+        states = collected_states.obs[:-1]
+        next_states = collected_states.obs[1:]
+        return self.from_transitions_to_data(states, actions, next_states)
 
     def do_episode(self,
                    model_state: ModelState,
@@ -382,7 +392,7 @@ class SafeModelBasedAgent:
             model_state=model_state,
             key=key,
         )
-        exploration_states, exploration_actions, intrinsic_rewards, extrinsic_rewards, cost = self.simulate_on_true_env(
+        exploration_states, exploration_actions, intrinsic_rewards, extrinsic_rewards, cost, new_data = self.simulate_on_true_env(
             model_state=model_state,
             key=key)
 
@@ -437,7 +447,6 @@ class SafeModelBasedAgent:
                 print(task_metrics)
             print(f'End of task {task.name} evaluation')
 
-        new_data = self.from_collected_transitions_to_data(exploration_states, exploration_actions)
         data = Data(inputs=jnp.concatenate([data.inputs, new_data.inputs]),
                     outputs=jnp.concatenate([data.outputs, new_data.outputs]), )
 
@@ -499,16 +508,15 @@ class SafeModelBasedAgent:
         create_folder(folder_name)
         train_model = True
         if data is None:
-            data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size + self.env.action_size)),
-                        outputs=jnp.zeros(shape=(0, self.env.observation_size)))
             train_model = False
-
             if self.prior_knowledge == "none":
                 data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size + self.env.action_size)),
-                        outputs=jnp.zeros(shape=(0, self.env.observation_size)))
+                            outputs=jnp.zeros(shape=(0, self.env.observation_size)))
             elif self.prior_knowledge == "pendulum":
                 data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size)),
-                        outputs=jnp.zeros(shape=(0, self.env.observation_size)))
+                            outputs=jnp.zeros(shape=(0, self.env.observation_size)))
+            else:
+                raise NotImplementedError(f'Unknown prior knowledge {self.prior_knowledge}')
 
         recurrent_metrics = {
             'cum_intrinsic_rewards_sum': 0.0,

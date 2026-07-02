@@ -66,6 +66,7 @@ def experiment(
     from flax import struct
     from distrax import Distribution, Normal
     from typing import Tuple
+    from brax.envs.base import State
     from optax import constant_schedule
     from bsm.utils.normalization import Data
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
@@ -110,18 +111,29 @@ def experiment(
 
     if num_offline_data > 0:
         offline_data_gen = PendulumOfflineData(env=env, max_velocity=max_abs_velocity)
-        transitions = offline_data_gen.sample_transitions(key=offline_data_key,
-                                                          num_samples=num_offline_data)
         if prior_knowledge == "none":
+            transitions = offline_data_gen.sample_transitions(key=offline_data_key,
+                                                              num_samples=num_offline_data)
             offline_inputs = jnp.concatenate([transitions.observation, transitions.action], axis=-1)
             offline_outputs = transitions.next_observation - transitions.observation
         elif prior_knowledge == "pendulum":
-            offline_inputs = transitions.observation
+            offline_state_key, offline_action_key = jr.split(offline_data_key)
+            offline_states = offline_data_gen.sample_states(key=offline_state_key,
+                                                            num_samples=num_offline_data)
+            offline_actions = offline_data_gen.sample_actions(key=offline_action_key,
+                                                              num_samples=num_offline_data)
+            offline_brax_state = State(pipeline_state=jnp.zeros(shape=(num_offline_data,)),
+                                       obs=offline_states,
+                                       reward=jnp.zeros(shape=(num_offline_data,)),
+                                       done=jnp.zeros(shape=(num_offline_data,)))
+            for _ in range(action_repeat):
+                offline_brax_state = jax.vmap(env.step)(offline_brax_state, offline_actions)
+            offline_inputs = offline_states
             known_action_effect = jax.vmap(
                 pendulum_known_action_effect,
-                in_axes=(0, 0, None),
-            )(transitions.observation, transitions.action, True)
-            offline_outputs = transitions.next_observation - transitions.observation - known_action_effect
+                in_axes=(0, 0, None, None),
+            )(offline_states, offline_actions, True, action_repeat)
+            offline_outputs = offline_brax_state.obs - offline_states - known_action_effect
         else:
             raise NotImplementedError(f'Unknown prior knowledge {prior_knowledge}')
         offline_data = Data(inputs=offline_inputs, outputs=offline_outputs)
