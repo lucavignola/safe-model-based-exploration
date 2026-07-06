@@ -30,6 +30,7 @@ def experiment(
         num_training_steps: int = 1_000,
         env_margin_factor: float = 10.0,
         process_noise_scale: float = 1e-3,
+        model_noise_scale: float = 1e-3,
         reward_source: str = 'gym',
         use_optimism: bool = True,
         use_pessimism: bool = True,
@@ -111,23 +112,21 @@ def experiment(
 
     if num_offline_data > 0:
         offline_data_gen = PendulumOfflineData(env=env, max_velocity=max_abs_velocity)
+        offline_state_key, offline_action_key = jr.split(offline_data_key)
+        offline_states = offline_data_gen.sample_states(key=offline_state_key,
+                                                        num_samples=num_offline_data)
+        offline_actions = offline_data_gen.sample_actions(key=offline_action_key,
+                                                          num_samples=num_offline_data)
+        offline_brax_state = State(pipeline_state=jnp.zeros(shape=(num_offline_data,)),
+                                   obs=offline_states,
+                                   reward=jnp.zeros(shape=(num_offline_data,)),
+                                   done=jnp.zeros(shape=(num_offline_data,)))
+        for _ in range(action_repeat):
+            offline_brax_state = jax.vmap(env.step)(offline_brax_state, offline_actions)
         if prior_knowledge == "none":
-            transitions = offline_data_gen.sample_transitions(key=offline_data_key,
-                                                              num_samples=num_offline_data)
-            offline_inputs = jnp.concatenate([transitions.observation, transitions.action], axis=-1)
-            offline_outputs = transitions.next_observation - transitions.observation
+            offline_inputs = jnp.concatenate([offline_states, offline_actions], axis=-1)
+            offline_outputs = offline_brax_state.obs - offline_states
         elif prior_knowledge == "pendulum":
-            offline_state_key, offline_action_key = jr.split(offline_data_key)
-            offline_states = offline_data_gen.sample_states(key=offline_state_key,
-                                                            num_samples=num_offline_data)
-            offline_actions = offline_data_gen.sample_actions(key=offline_action_key,
-                                                              num_samples=num_offline_data)
-            offline_brax_state = State(pipeline_state=jnp.zeros(shape=(num_offline_data,)),
-                                       obs=offline_states,
-                                       reward=jnp.zeros(shape=(num_offline_data,)),
-                                       done=jnp.zeros(shape=(num_offline_data,)))
-            for _ in range(action_repeat):
-                offline_brax_state = jax.vmap(env.step)(offline_brax_state, offline_actions)
             offline_inputs = offline_states
             known_action_effect = jax.vmap(
                 pendulum_known_action_effect,
@@ -159,6 +158,7 @@ def experiment(
         num_training_steps=num_training_steps,
         env_margin_factor=env_margin_factor,
         process_noise_scale=process_noise_scale,
+        model_noise_scale=model_noise_scale,
         reward_source=reward_source,
         use_optimism=use_optimism,
         use_pessimism=use_pessimism,
@@ -184,7 +184,7 @@ def experiment(
         kernel=ARD(input_dim=model_input_dim, length_scale=0.1),
         input_dim=model_input_dim,
         output_dim=env.observation_size,
-        output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
+        output_stds=model_noise_scale * jnp.ones(shape=(env.observation_size,)),
         logging_wandb=log_wandb,
         beta=jnp.ones(3) * beta,
         num_training_steps=constant_schedule(num_training_steps),
@@ -283,7 +283,7 @@ def experiment(
         'log_to_wandb': log_wandb,
         'use_pessimism': use_pessimism,
         'use_optimism': use_optimism,
-        'use_mean_dynamics': use_mean_dynamics,
+        'use_mean_dynamics': use_mean_dynamics if alg_name in ['SBSRL'] else False,
         'aleatoric_noise_in_prediction': aleatoric_noise_in_prediction,
         'prior_knowledge': prior_knowledge,
     }
@@ -402,6 +402,7 @@ def main(args):
         num_training_steps=args.num_training_steps,
         env_margin_factor=args.env_margin_factor,
         process_noise_scale=args.process_noise_scale,
+        model_noise_scale=args.model_noise_scale,
         reward_source=args.reward_source,
         use_optimism=bool(args.use_optimism),
         use_pessimism=bool(args.use_pessimism),
@@ -453,6 +454,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_training_steps', type=int, default=1_000)
     parser.add_argument('--env_margin_factor', type=float, default=10.0)
     parser.add_argument('--process_noise_scale', type=float, default=1e-3)
+    parser.add_argument('--model_noise_scale', type=float, default=1e-3)
     parser.add_argument('--reward_source', type=str, default='gym')
     parser.add_argument('--use_optimism', type=int, default=1)
     parser.add_argument('--use_pessimism', type=int, default=1)

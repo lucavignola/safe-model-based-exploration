@@ -28,6 +28,7 @@ HARDWARE_CONFIGS = {
 _applicable_configs = {
     'env_margin_factor': [10],
     'process_noise_scale': [1e-3],
+    'model_noise_scale': [1e-3],
     'reward_source': ['gym'],
     'project_name': [PROJECT_NAME],
     'num_training_steps': [1_000],

@@ -18,7 +18,7 @@ from bsm.utils.type_aliases import ModelState
 from distrax import Distribution, Normal
 from flax import struct
 from jaxtyping import Key, Array, PyTree, Float
-from smbrl.mbpo_stubs import Reward, RewardParams
+from smbrl.mbpo_stubs import Reward, RewardParams, rollout_actions
 from optax import Schedule, constant_schedule
 
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
@@ -193,24 +193,19 @@ class SafeModelBasedAgent:
                                    extrinsic_rewards: chex.Array) -> None:
         return None
 
-    def get_additional_exploration_optimum(self,
-                                           model_state: ModelState,
-                                           key: Key[Array, '2']) -> chex.Array | None:
-        if not self.enable_additional_exploration_optimizer or self.optimizer != 'icem':
-            return None
-
+    def get_mean_intrinsic_system(self) -> ExplorationSystem:
         exploration_dynamics = ExplorationDynamics(
             x_dim=self.env.observation_size,
             u_dim=self.env.action_size,
             model=self.model,
             use_log=False,
             scale_with_aleatoric_std=False,
-            use_mean_dynamics=False,
-            aleatoric_noise_in_prediction=True,
+            use_mean_dynamics=True,
+            aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
             prior_knowledge=self.prior_knowledge,
             prior_num_steps=self.action_repeat,
         )
-        learned_system = ExplorationSystem(
+        return ExplorationSystem(
             dynamics=exploration_dynamics,
             reward=ExplorationReward(
                 x_dim=self.env.observation_size,
@@ -218,9 +213,55 @@ class SafeModelBasedAgent:
             ),
         )
 
+    def set_model_state_for_system(self,
+                                   system: ExplorationSystem,
+                                   model_state: ModelState,
+                                   key: Key[Array, '2']):
+        system_params = system.init_params(key)
+        dynamics_params = system_params.dynamics_params.replace(model_state=model_state)
+        return system_params.replace(dynamics_params=dynamics_params)
+
+    def evaluate_action_sequence_mean_intrinsic(self,
+                                                model_state: ModelState,
+                                                init_state: chex.Array,
+                                                actions: chex.Array,
+                                                key: Key[Array, '2']) -> chex.Array:
+        learned_system = self.get_mean_intrinsic_system()
+        particle_keys = jr.split(key, self.icem_params.num_particles)
+
+        def rollout_sum(particle_key: Key[Array, '2']) -> chex.Array:
+            system_params = self.set_model_state_for_system(
+                system=learned_system,
+                model_state=model_state,
+                key=particle_key,
+            )
+            transitions = rollout_actions(
+                system=learned_system,
+                system_params=system_params,
+                init_state=init_state,
+                horizon=actions.shape[0],
+                actions=actions,
+                action_repeat=1,
+            )
+            return jnp.sum(transitions.reward)
+
+        return jnp.mean(jax.vmap(rollout_sum)(particle_keys))
+
+    def get_additional_exploration_optimum(self,
+                                           model_state: ModelState,
+                                           key: Key[Array, '2'],
+                                           horizon: int | None = None) -> chex.Array | None:
+        if not self.enable_additional_exploration_optimizer or self.optimizer != 'icem':
+            return None
+
+        if horizon is None:
+            horizon = self.episode_length
+
+        learned_system = self.get_mean_intrinsic_system()
+
         key, optimizer_key = jr.split(key)
         optimizer = iCemTO(
-            horizon=self.episode_length, #TODO: check that it is not too long + action_repeat
+            horizon=horizon,
             action_dim=self.env.action_size,
             key=optimizer_key,
             opt_params=self.icem_params,
@@ -232,9 +273,13 @@ class SafeModelBasedAgent:
 
         key, init_key = jr.split(key)
         optimizer_state = optimizer.init(key=init_key)
-        dynamics_params = optimizer_state.system_params.dynamics_params.replace(model_state=model_state)
-        system_params = optimizer_state.system_params.replace(dynamics_params=dynamics_params)
-        optimizer_state = optimizer_state.replace(system_params=system_params)
+        optimizer_state = optimizer_state.replace(
+            system_params=self.set_model_state_for_system(
+                system=learned_system,
+                model_state=model_state,
+                key=init_key,
+            )
+        )
 
         env_state = self.get_train_env_state(rng=key)
         _, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
@@ -252,7 +297,7 @@ class SafeModelBasedAgent:
                              key: Key[Array, '2'], ) -> Tuple[
         PyTree[Array, 'episode_length ...'], Float[Array, 'episode_length action_dim'], Float[
             Array, 'episode_length 1'], Float[
-            Array, 'episode_length 1'], Float[Array, '1'], Data]:
+            Array, 'episode_length 1'], Float[Array, '1'], Data, chex.Array]:
         reward = self.get_train_rewards()
 
         exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
@@ -307,11 +352,19 @@ class SafeModelBasedAgent:
         actions = []
         intrinsic_rewards = []
         extrinsic_rewards = []
+        first_plan_mean_intrinsic_reward = None
         # TODO: Should implement treatment of done flags
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
             print(f'Step {i}: reward is {optimizer_state.best_reward}')
             decision_state = env_state.obs
+            if i == 0 and self.enable_additional_exploration_optimizer:
+                first_plan_mean_intrinsic_reward = self.evaluate_action_sequence_mean_intrinsic(
+                    model_state=model_state,
+                    init_state=decision_state,
+                    actions=optimizer_state.best_sequence,
+                    key=key,
+                )
             old_state = env_state.obs
             for _ in range(self.action_repeat):
                 old_state = env_state.obs
@@ -338,7 +391,7 @@ class SafeModelBasedAgent:
         extrinsic_rewards = jt.map(lambda *xs: jnp.stack(xs), *extrinsic_rewards)
         costs = self.cost_fn_env(collected_states.obs[:-1], actions)
         model_data = self.from_collected_transitions_to_data(collected_states, actions)
-        return collected_states, actions, intrinsic_rewards, extrinsic_rewards, costs, model_data
+        return collected_states, actions, intrinsic_rewards, extrinsic_rewards, costs, model_data, first_plan_mean_intrinsic_reward
 
     def from_transitions_to_data(self,
                                  states: Float[Array, 'num_transitions observation_dim'],
@@ -392,7 +445,12 @@ class SafeModelBasedAgent:
             model_state=model_state,
             key=key,
         )
-        exploration_states, exploration_actions, intrinsic_rewards, extrinsic_rewards, cost, new_data = self.simulate_on_true_env(
+        additional_opt_planning_horizon = self.get_additional_exploration_optimum(
+            model_state=model_state,
+            key=jr.fold_in(key, 1),
+            horizon=self.icem_horizon,
+        )
+        exploration_states, exploration_actions, intrinsic_rewards, extrinsic_rewards, cost, new_data, first_plan_mean_intrinsic_reward = self.simulate_on_true_env(
             model_state=model_state,
             key=key)
 
@@ -425,6 +483,22 @@ class SafeModelBasedAgent:
                     additional_opt_value / intrinsic_rewards_sum if intrinsic_rewards_sum != 0 else float('inf')
                 )
                 metrics['cumulative_intrinsic_rewards_ratio'] = recurrent_metrics['cum_additional_opt_value'] / recurrent_metrics['cum_intrinsic_rewards_sum'] if recurrent_metrics['cum_intrinsic_rewards_sum'] != 0 else float('inf')
+                if additional_opt_planning_horizon is not None and first_plan_mean_intrinsic_reward is not None:
+                    additional_opt_planning_horizon_value = additional_opt_planning_horizon.item()
+                    first_plan_mean_intrinsic_reward_value = first_plan_mean_intrinsic_reward.item()
+                    recurrent_metrics['cum_additional_opt_planning_horizon_value'] += additional_opt_planning_horizon_value
+                    recurrent_metrics['cum_first_plan_mean_intrinsic_rewards_sum'] += first_plan_mean_intrinsic_reward_value
+                    metrics['additional_opt_planning_horizon'] = additional_opt_planning_horizon_value
+                    metrics['first_plan_mean_intrinsic_rewards'] = first_plan_mean_intrinsic_reward_value
+                    metrics['additional_opt_first_plan_mean_ratio'] = (
+                        additional_opt_planning_horizon_value / first_plan_mean_intrinsic_reward_value
+                        if first_plan_mean_intrinsic_reward_value != 0 else float('inf')
+                    )
+                    metrics['cumulative_mean_ratio'] = (
+                        recurrent_metrics['cum_additional_opt_planning_horizon_value'] /
+                        recurrent_metrics['cum_first_plan_mean_intrinsic_rewards_sum']
+                        if recurrent_metrics['cum_first_plan_mean_intrinsic_rewards_sum'] != 0 else float('inf')
+                    )
             if hasattr(self, 'action_cost'):
                 action_tolerance = ToleranceReward(bounds=(-0.1, 0.1), margin=0.1, sigmoid='gaussian')
                 action_penalty = getattr(self, 'action_cost') * jnp.sum(1 - action_tolerance(exploration_actions))
@@ -521,6 +595,8 @@ class SafeModelBasedAgent:
         recurrent_metrics = {
             'cum_intrinsic_rewards_sum': 0.0,
             'cum_additional_opt_value': 0.0,
+            'cum_additional_opt_planning_horizon_value': 0.0,
+            'cum_first_plan_mean_intrinsic_rewards_sum': 0.0,
         }
         for episode_idx in range(num_episodes):
             key, subkey = jr.split(key)
