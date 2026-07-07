@@ -22,6 +22,7 @@ from smbrl.mbpo_stubs import Reward, RewardParams, rollout_actions
 from optax import Schedule, constant_schedule
 
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
+from smbrl.model_based_rl.active_exploration_system import cartpole_known_action_effect
 from smbrl.model_based_rl.active_exploration_system import pendulum_known_action_effect
 from smbrl.optimizer.icem import iCemParams, iCemTO, AbstractCost
 # from smbrl.optimizer.ipopt_optimizer import IPOPTOptimizer, IPOPTParams
@@ -373,7 +374,7 @@ class SafeModelBasedAgent:
             # Calculate intrinsic reward
             if self.prior_knowledge == "none":
                 model_input = jnp.concatenate([decision_state, action])
-            elif self.prior_knowledge == "pendulum":
+            elif self.prior_knowledge in ("pendulum", "cartpole"):
                 model_input = decision_state
             else:
                 raise NotImplementedError(f'Unknown prior knowledge {self.prior_knowledge}')
@@ -404,6 +405,12 @@ class SafeModelBasedAgent:
             inputs = states
             known_action_effect = jax.vmap(
                 pendulum_known_action_effect,
+                in_axes=(0, 0, None, None),
+            )(states, actions, self.predict_difference, self.action_repeat)
+        elif self.prior_knowledge == "cartpole":
+            inputs = states
+            known_action_effect = jax.vmap(
+                cartpole_known_action_effect,
                 in_axes=(0, 0, None, None),
             )(states, actions, self.predict_difference, self.action_repeat)
         else:
@@ -586,7 +593,7 @@ class SafeModelBasedAgent:
             if self.prior_knowledge == "none":
                 data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size + self.env.action_size)),
                             outputs=jnp.zeros(shape=(0, self.env.observation_size)))
-            elif self.prior_knowledge == "pendulum":
+            elif self.prior_knowledge in ("pendulum", "cartpole"):
                 data = Data(inputs=jnp.zeros(shape=(0, self.env.observation_size)),
                             outputs=jnp.zeros(shape=(0, self.env.observation_size)))
             else:

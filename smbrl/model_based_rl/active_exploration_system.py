@@ -12,6 +12,7 @@ from mbpo.systems.base_systems import SystemParams, SystemState, System
 from mbpo.systems.dynamics.base_dynamics import Dynamics
 from mbpo.systems.dynamics.base_dynamics import DynamicsParams as DummyDynamicsParams
 from mbpo.systems.rewards.base_rewards import Reward, RewardParams
+from smbrl.envs.cartpole_lenart import CartPoleDynamicsParams
 from smbrl.envs.pendulum import PendulumDynamicsParams
 
 
@@ -78,6 +79,9 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         elif self.prior_knowledge == "pendulum":
             pred = self.model(x, dynamics_params.model_state)
             known_action_effect = self.pendulum_prior(x, u, self.predict_difference)
+        elif self.prior_knowledge == "cartpole":
+            pred = self.model(x, dynamics_params.model_state)
+            known_action_effect = self.cartpole_prior(x, u, self.predict_difference)
         else:
             raise NotImplementedError(f'Unknown prior knowledge {self.prior_knowledge}')
         epistemic_std, aleatoric_std = pred.epistemic_std, pred.aleatoric_std
@@ -107,6 +111,9 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
 
     def pendulum_prior(self, x: chex.Array, u: chex.Array, predict_difference: bool) -> chex.Array:
         return pendulum_known_action_effect(x, u, predict_difference, self.prior_num_steps)
+
+    def cartpole_prior(self, x: chex.Array, u: chex.Array, predict_difference: bool) -> chex.Array:
+        return cartpole_known_action_effect(x, u, predict_difference, self.prior_num_steps)
 
 
 def pendulum_deterministic_next_state(x: chex.Array,
@@ -141,6 +148,78 @@ def pendulum_known_action_effect(x: chex.Array,
     for _ in range(num_steps):
         action_next_state = pendulum_deterministic_next_state(action_next_state, u, dynamics_params)
         passive_next_state = pendulum_deterministic_next_state(passive_next_state, jnp.zeros_like(u), dynamics_params)
+    action_effect = action_next_state - passive_next_state
+    if predict_difference:
+        return action_effect
+    return action_effect
+
+
+def cartpole_from_obs_to_state(x: chex.Array) -> chex.Array:
+    chex.assert_shape(x, (5,))
+    position, cos_theta, sin_theta, linear_velocity, angular_velocity = x
+    angle = jnp.arctan2(sin_theta, cos_theta)
+    return jnp.array([position, angle, linear_velocity, angular_velocity])
+
+
+def cartpole_from_state_to_obs(x: chex.Array) -> chex.Array:
+    chex.assert_shape(x, (4,))
+    position, angle, linear_velocity, angular_velocity = x
+    return jnp.array([position, jnp.cos(angle), jnp.sin(angle), linear_velocity, angular_velocity])
+
+
+def cartpole_ode(x: chex.Array,
+                 u: chex.Array,
+                 dynamics_params: CartPoleDynamicsParams | None = None) -> chex.Array:
+    chex.assert_shape(x, (4,))
+    chex.assert_shape(u, (1,))
+    if dynamics_params is None:
+        dynamics_params = CartPoleDynamicsParams()
+
+    position, theta, linear_velocity, angular_velocity = x
+    del position
+    force = jnp.clip(u[0], -1.0, 1.0) * dynamics_params.max_torque
+    cos_theta = jnp.cos(theta)
+    sin_theta = jnp.sin(theta)
+
+    m_1 = dynamics_params.m_1
+    m_c = dynamics_params.m_c
+    l_1 = dynamics_params.l_1
+    g = dynamics_params.g
+
+    mass_matrix = jnp.array([
+        [m_1 + m_c, m_1 * l_1 * cos_theta],
+        [m_1 * l_1 * cos_theta, m_1 * l_1 * l_1],
+    ])
+    rhs = jnp.array([
+        force + sin_theta * l_1 * m_1 * angular_velocity * angular_velocity,
+        -m_1 * l_1 * g * sin_theta,
+    ])
+    acceleration = jnp.linalg.inv(mass_matrix).dot(rhs)
+    return jnp.array([linear_velocity, angular_velocity, acceleration[0], acceleration[1]])
+
+
+def cartpole_deterministic_next_state(x: chex.Array,
+                                      u: chex.Array,
+                                      dynamics_params: CartPoleDynamicsParams | None = None) -> chex.Array:
+    chex.assert_shape(x, (5,))
+    chex.assert_shape(u, (1,))
+    if dynamics_params is None:
+        dynamics_params = CartPoleDynamicsParams()
+    compressed_state = cartpole_from_obs_to_state(x)
+    next_compressed_state = compressed_state + cartpole_ode(compressed_state, u, dynamics_params) * dynamics_params.dt
+    return cartpole_from_state_to_obs(next_compressed_state)
+
+
+def cartpole_known_action_effect(x: chex.Array,
+                                 u: chex.Array,
+                                 predict_difference: bool = True,
+                                 num_steps: int = 1,
+                                 dynamics_params: CartPoleDynamicsParams | None = None) -> chex.Array:
+    action_next_state = x
+    passive_next_state = x
+    for _ in range(num_steps):
+        action_next_state = cartpole_deterministic_next_state(action_next_state, u, dynamics_params)
+        passive_next_state = cartpole_deterministic_next_state(passive_next_state, jnp.zeros_like(u), dynamics_params)
     action_effect = action_next_state - passive_next_state
     if predict_difference:
         return action_effect

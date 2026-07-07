@@ -9,6 +9,7 @@ from bsm.utils import Data
 from flax import struct
 from jax import vmap
 from jaxtyping import Float, Array, Scalar
+from smbrl.utils.experiment_utils import tolerance
 
 
 @chex.dataclass
@@ -30,12 +31,26 @@ class CartPoleRewardParams:
     target_angle: chex.Array = struct.field(default_factory=lambda: jnp.array(jnp.pi))
 
 
+def sparse_reward_function(position, angle, linear_velocity, angular_velocity, u, action_cost, target_angle=jnp.pi):
+    diff_th = angle - target_angle
+    diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
+    reward = (
+        tolerance(jnp.cos(diff_th), (0.5, 1.0), 0.1)
+        * tolerance(position, (-0.1, 0.1), 0.5)
+        * tolerance(linear_velocity, (-0.5, 0.5), 0.5)
+        * tolerance(angular_velocity, (-0.5, 0.5), 0.5)
+        - action_cost * (1 - tolerance(u, (-0.5, 0.5), 0.1))
+    )
+    return reward
+
+
 class CartPoleEnv(Env):
     def __init__(self,
                  reward_source: str = 'gym',
                  init_angle: float = 0.0,
                  add_process_noise: bool = False,
                  process_noise_scale: Float[Array, 'observation_dim'] | float = 1e-3,
+                 action_cost: float = 0.0,
                  ):
         self.dynamics_params = CartPoleDynamicsParams()
         self.reward_params = CartPoleRewardParams()
@@ -43,6 +58,7 @@ class CartPoleEnv(Env):
         self.reward_source = reward_source
         self.add_process_noise = add_process_noise
         self.process_noise_scale = process_noise_scale
+        self.action_cost = action_cost
 
     def reset(self,
               rng: jax.Array) -> State:
@@ -91,6 +107,16 @@ class CartPoleEnv(Env):
         reward = reward.squeeze()
         return reward
 
+    def sparse_reward(self,
+                      x: Float[Array, 'observation_dim'],
+                      u: Float[Array, 'action_dim']) -> Float[Array, 'None']:
+        x_compressed = self.from_obs_to_state(x)
+        position, angle = x_compressed[0], x_compressed[1]
+        linear_velocity, angular_velocity = x_compressed[2], x_compressed[3]
+        reward = sparse_reward_function(position, angle, linear_velocity, angular_velocity, u, self.action_cost)
+        reward = reward.squeeze()
+        return reward
+
     @partial(jax.jit, static_argnums=0)
     def step(self,
              state: State,
@@ -115,6 +141,8 @@ class CartPoleEnv(Env):
 
         if self.reward_source == 'gym':
             next_reward = self.reward(x, action)
+        elif self.reward_source == 'sparse':
+            next_reward = self.sparse_reward(x, action)
         elif self.reward_source == 'dm-control':
             raise NotImplementedError(f'{self.reward_source} not implemented')
         else:

@@ -4,6 +4,7 @@ import sys
 import numpy as np
 
 from smbrl.utils.experiment_utils import Logger, hash_dict
+from smbrl.envs.cartpole_lenart import sparse_reward_function
 
 
 def experiment(
@@ -47,8 +48,12 @@ def experiment(
         wandb_notes: str = None,
         num_traj: int = 0,
         process_noise_scale: float = 1e-3,
+        model_noise_scale: float = 1e-3,
+        reward_source: str = 'gym',
+        sparse_task: bool = False,
         use_mean_dynamics: bool = False,
         aleatoric_noise_in_prediction: bool = True,
+        prior_knowledge: str = "none",
 ):
     if num_gpus == 0:
         import os
@@ -67,6 +72,7 @@ def experiment(
     from mbpo.systems.rewards.base_rewards import Reward, RewardParams
     from smbrl.optimizer.icem import iCemParams
     from smbrl.envs.cartpole_lenart import CartPoleEnv, CartPoleOfflineData, CartPoleTrajectoryOfflineData
+    from smbrl.model_based_rl.active_exploration_system import cartpole_known_action_effect
     from smbrl.playground.cartpole_icem import PositionBound
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
@@ -109,11 +115,20 @@ def experiment(
         actsafe_index=actsafe_index,
         wandb_notes=wandb_notes,  # Add to config for visibility
         process_noise_scale=process_noise_scale,
+        model_noise_scale=model_noise_scale,
+        reward_source=reward_source,
+        sparse_task=sparse_task,
         use_mean_dynamics=use_mean_dynamics,
         aleatoric_noise_in_prediction=aleatoric_noise_in_prediction,
+        prior_knowledge=prior_knowledge,
     )
     import jax
     jax.config.update("jax_enable_x64", True)
+
+    if prior_knowledge not in ("none", "cartpole"):
+        raise NotImplementedError(f'Unknown prior knowledge {prior_knowledge}')
+    if prior_knowledge == "cartpole" and (use_precomputed_kernel_params or use_function_norms):
+        raise NotImplementedError("Cartpole prior mode does not support precomputed 6D kernel parameters/function norms.")
 
     precomputed_kernel_params = {
         'pseudo_length_scale': jnp.array([[7.16197382, 6.65598727, 1.27592871, 5.13755356, 4.53211409,
@@ -142,6 +157,9 @@ def experiment(
     key = jr.PRNGKey(seed)
     key, key_offline_data = jr.split(key)
 
+    env = CartPoleEnv()
+    model_input_dim = env.observation_size + env.action_size if prior_knowledge == "none" else env.observation_size
+
     # Choose data collection method based on num_traj parameter
     if num_traj == 0:
         # Use original uniform grid data collection
@@ -155,7 +173,7 @@ def experiment(
                                                    )
     else:
         # Use trajectory-based data collection
-        offline_data_traj = CartPoleTrajectoryOfflineData(action_repeat=1)
+        offline_data_traj = CartPoleTrajectoryOfflineData(action_repeat=action_repeat)
         offline_data = offline_data_traj.sample(
             key,
             num_samples=500,
@@ -163,8 +181,23 @@ def experiment(
             trajectory_length=50
         )
 
-    env = CartPoleEnv()
-    true_env = CartPoleEnv(add_process_noise=True, process_noise_scale=process_noise_scale)
+    if prior_knowledge == "cartpole":
+        offline_states = offline_data.inputs[:, :env.observation_size]
+        offline_actions = offline_data.inputs[:, env.observation_size:]
+        if offline_data.inputs.shape[0] == 0:
+            known_action_effect = jnp.zeros_like(offline_data.outputs)
+        else:
+            known_action_effect = jax.vmap(
+                cartpole_known_action_effect,
+                in_axes=(0, 0, None, None),
+            )(offline_states, offline_actions, True, action_repeat)
+        offline_data = Data(inputs=offline_states,
+                            outputs=offline_data.outputs - known_action_effect)
+
+    true_env = CartPoleEnv(reward_source=reward_source,
+                           add_process_noise=True,
+                           process_noise_scale=process_noise_scale,
+                           action_cost=action_cost)
 
     if use_precomputed_kernel_params:
         num_training_steps = constant_schedule(0)
@@ -173,10 +206,10 @@ def experiment(
 
     if use_function_norms:
         model = GPStatisticalModel(
-            kernel=ARD(input_dim=env.observation_size + env.action_size),
-            input_dim=env.observation_size + env.action_size,
+            kernel=ARD(input_dim=model_input_dim),
+            input_dim=model_input_dim,
             output_dim=env.observation_size,
-            output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
+            output_stds=model_noise_scale * jnp.ones(shape=(env.observation_size,)),
             logging_wandb=log_wandb,
             beta=None,
             f_norm_bound=precomputed_function_norms * beta,
@@ -186,14 +219,14 @@ def experiment(
         )
     else:
         model = GPStatisticalModel(
-            kernel=ARD(input_dim=env.observation_size + env.action_size),
-            input_dim=env.observation_size + env.action_size,
+            kernel=ARD(input_dim=model_input_dim),
+            input_dim=model_input_dim,
             output_dim=env.observation_size,
-            output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
+            output_stds=model_noise_scale * jnp.ones(shape=(env.observation_size,)),
             logging_wandb=log_wandb,
             beta=jnp.ones(shape=(env.observation_size,)) * beta,
             fixed_kernel_params=use_precomputed_kernel_params,
-            normalization_stats=precomputed_normalization_stats,
+            normalization_stats=precomputed_normalization_stats if prior_knowledge == "none" else None,
             num_training_steps=num_training_steps,
         )
 
@@ -206,9 +239,14 @@ def experiment(
         target_angle: chex.Array = struct.field(default_factory=lambda: jnp.array(jnp.pi))
 
     class CartPoleReward(Reward):
-        def __init__(self, target_angle: float = jnp.pi):
+        def __init__(self,
+                     target_angle: float = jnp.pi,
+                     action_cost: float = 0.0,
+                     sparse_task: bool = False):
             super().__init__(x_dim=5, u_dim=1)
             self.target_angle = jnp.array(target_angle)
+            self.action_cost = action_cost
+            self.sparse_task = sparse_task
 
         @staticmethod
         def cos_sin_to_angle_representation(cos_sin_angle: Float[Array, '2']) -> Scalar:
@@ -234,11 +272,22 @@ def experiment(
             linear_velocity, angular_velocity = x_compressed[2], x_compressed[3]
 
             target_angle = reward_params.target_angle
-            diff_th = angle - target_angle
-            diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
-            reward = -(reward_params.angle_cost * diff_th ** 2 + reward_params.pos_cost * position ** 2 +
-                       reward_params.vel_cost * (
-                           linear_velocity ** 2 + angular_velocity ** 2)) - reward_params.control_cost * u[0] ** 2
+            if self.sparse_task:
+                reward = sparse_reward_function(
+                    position=position,
+                    angle=angle,
+                    linear_velocity=linear_velocity,
+                    angular_velocity=angular_velocity,
+                    u=u,
+                    action_cost=self.action_cost,
+                    target_angle=target_angle,
+                )
+            else:
+                diff_th = angle - target_angle
+                diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
+                reward = -(reward_params.angle_cost * diff_th ** 2 + reward_params.pos_cost * position ** 2 +
+                           reward_params.vel_cost * (
+                               linear_velocity ** 2 + angular_velocity ** 2)) - reward_params.control_cost * u[0] ** 2
             reward = reward.squeeze()
             return Normal(loc=reward, scale=jnp.zeros_like(reward)), reward_params
 
@@ -282,7 +331,9 @@ def experiment(
         'action_repeat': action_repeat,
         'cost_fn': cost_fn,
         'test_tasks': [#Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
-                       Task(reward=CartPoleReward(target_angle=jnp.pi), name='Swing up', env=true_env),
+                       Task(reward=CartPoleReward(target_angle=jnp.pi,
+                                                  action_cost=action_cost,
+                                                  sparse_task=sparse_task), name='Swing up', env=true_env),
                       ],
         'predict_difference': True,
         'num_training_steps': num_training_steps,
@@ -292,14 +343,15 @@ def experiment(
         'use_pessimism': use_pessimism,
         'use_optimism': use_optimism,
         'optimizer': optimizer,
-        'use_mean_dynamics': use_mean_dynamics,
+        'use_mean_dynamics': use_mean_dynamics if alg_name in ['SBSRL'] else False,
         'aleatoric_noise_in_prediction': aleatoric_noise_in_prediction,
+        'prior_knowledge': prior_knowledge,
     }
 
     # Add SBSRL-specific parameters if needed
     if alg_name == 'SBSRL':
         agent_kwargs.update({
-            'action_cost': action_cost,
+            'action_cost': 0.0,  # Already included in the reward function
             'lambda_sigma': lambda_sigma,
             'uncertainty_eps': uncertainty_eps,
             'uncertainty_decay_factor': uncertainty_decay_factor,
@@ -324,7 +376,11 @@ def experiment(
         model_state.model_state.data_stats = precomputed_normalization_stats
 
     # Here we need to take care of the first datapoint!!
-    model_state.model_state.history = Data(inputs=jnp.array([[0., 1.0, 0., 0., 0., 0.]]),
+    if prior_knowledge == "none":
+        initial_history_inputs = jnp.array([[0., 1.0, 0., 0., 0., 0.]])
+    else:
+        initial_history_inputs = jnp.array([[0., 1.0, 0., 0., 0.]])
+    model_state.model_state.history = Data(inputs=initial_history_inputs,
                                            outputs=jnp.array([[0., 0., 0., 0., 0.]]))
 
     if log_wandb:
@@ -424,8 +480,12 @@ def main(args):
         wandb_notes=args.wandb_notes,
         num_traj=args.num_traj,
         process_noise_scale=args.process_noise_scale,
+        model_noise_scale=args.model_noise_scale,
+        reward_source=args.reward_source,
+        sparse_task=args.sparse_task,
         use_mean_dynamics=args.use_mean_dynamics,
         aleatoric_noise_in_prediction=args.aleatoric_noise_in_prediction,
+        prior_knowledge=args.prior_knowledge,
     )
 
 
@@ -473,8 +533,12 @@ if __name__ == '__main__':
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
     parser.add_argument('--num_traj', type=int, default=0, help='Number of trajectories for trajectory-based data collection. 0=use uniform grid sampling')
     parser.add_argument('--process_noise_scale', type=float, default=1e-3)
+    parser.add_argument('--model_noise_scale', type=float, default=1e-3)
+    parser.add_argument('--reward_source', type=str, default='gym', choices=['gym', 'sparse'])
+    parser.add_argument('--sparse_task', action='store_true')
     parser.add_argument('--use_mean_dynamics', action='store_true')
     parser.add_argument('--aleatoric_noise_in_prediction', action='store_true')
+    parser.add_argument('--prior_knowledge', type=str, default='none', choices=['none', 'cartpole'])
 
     parser.add_argument('--seed', type=int, default=0)
 

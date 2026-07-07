@@ -54,6 +54,11 @@ _applicable_configs = {
     "violation_eps":  [0.6],
     "num_traj": [0],  # 0=uniform grid sampling, >0=trajectory-based sampling
     "process_noise_scale": [1e-3],
+    "model_noise_scale": [1e-3],
+    "reward_source": ["gym"],
+    "sparse_task": [False],
+    "prior_knowledge": ["none"],
+    "action_cost": [0.0],
     "use_mean_dynamics": [True],
     "aleatoric_noise_in_prediction": [True],
 }
@@ -86,7 +91,6 @@ _applicable_configs_sbsrl = {
     "use_pessimism": [0],
     "num_particles": num_particles,
     "lambda_sigma": [0],
-    "action_cost": [0],
     "uncertainty_eps": [0],
     "uncertainty_decay_factor": [1],
     "uncertainty_decay_mode": ["linear"],
