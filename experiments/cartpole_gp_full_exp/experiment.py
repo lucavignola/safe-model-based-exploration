@@ -409,7 +409,7 @@ def experiment(
             wandb_kwargs['dir'] = logs_dir
 
         wandb.init(**wandb_kwargs)
-    agent.run_episodes(num_episodes=10,
+    agent.run_episodes(num_episodes=15,
                        key=key,
                        model_state=model_state,
                        folder_name=f'{alg_name}/{exp_hash}/{logs_dir}/',

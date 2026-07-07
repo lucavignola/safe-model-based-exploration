@@ -36,7 +36,7 @@ def sparse_reward_function(position, angle, linear_velocity, angular_velocity, u
     diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
     reward = (
         tolerance(jnp.cos(diff_th), (0.5, 1.0), 0.1)
-        * tolerance(position, (-0.1, 0.1), 0.5)
+        * tolerance(position, (-0.5, 0.5), 0.5)
         * tolerance(linear_velocity, (-0.5, 0.5), 0.5)
         * tolerance(angular_velocity, (-0.5, 0.5), 0.5)
         - action_cost * (1 - tolerance(u, (-0.5, 0.5), 0.1))

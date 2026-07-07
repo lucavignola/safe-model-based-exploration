@@ -1,4 +1,5 @@
 import copy
+import math
 import os.path
 import pickle
 from typing import Tuple, NamedTuple, List
@@ -474,38 +475,69 @@ class SafeModelBasedAgent:
         # plt.show()
 
         if self.log_to_wandb:
-            intrinsic_rewards_sum = jnp.sum(intrinsic_rewards).item()
+            def finite_item(value):
+                value = float(jax.device_get(value))
+                return value if math.isfinite(value) else None
+
+            intrinsic_rewards_sum = finite_item(jnp.sum(intrinsic_rewards))
+            extrinsic_rewards_sum = finite_item(jnp.sum(extrinsic_rewards))
+            cost_value = finite_item(cost)
             metrics = {
                 'episode_idx': episode_idx,
-                'intrinsic_rewards': intrinsic_rewards_sum,
-                'extrinsic_rewards': jnp.sum(extrinsic_rewards).item(),
-                'constraint_cost': cost.item()
             }
+            if intrinsic_rewards_sum is not None:
+                metrics['intrinsic_rewards'] = intrinsic_rewards_sum
+            if extrinsic_rewards_sum is not None:
+                metrics['extrinsic_rewards'] = extrinsic_rewards_sum
+            if cost_value is not None:
+                metrics['constraint_cost'] = cost_value
             if additional_opt is not None:
-                additional_opt_value = additional_opt.item()
-                recurrent_metrics['cum_intrinsic_rewards_sum'] += intrinsic_rewards_sum
-                recurrent_metrics['cum_additional_opt_value'] += additional_opt_value
-                metrics['additional_opt'] = additional_opt_value
-                metrics['additional_opt_intrinsic_rewards_ratio'] = (
-                    additional_opt_value / intrinsic_rewards_sum if intrinsic_rewards_sum != 0 else float('inf')
+                additional_opt_value = finite_item(additional_opt)
+                valid_intrinsic_ratio = (
+                    additional_opt_value is not None
+                    and intrinsic_rewards_sum is not None
+                    and intrinsic_rewards_sum != 0
                 )
-                metrics['cumulative_intrinsic_rewards_ratio'] = recurrent_metrics['cum_additional_opt_value'] / recurrent_metrics['cum_intrinsic_rewards_sum'] if recurrent_metrics['cum_intrinsic_rewards_sum'] != 0 else float('inf')
+                metrics['additional_opt_is_finite'] = float(additional_opt_value is not None)
+                if valid_intrinsic_ratio:
+                    recurrent_metrics['cum_intrinsic_rewards_sum'] += intrinsic_rewards_sum
+                    recurrent_metrics['cum_additional_opt_value'] += additional_opt_value
+                    metrics['additional_opt'] = additional_opt_value
+                    metrics['additional_opt_intrinsic_rewards_ratio'] = (
+                        additional_opt_value / intrinsic_rewards_sum
+                    )
+                if recurrent_metrics['cum_intrinsic_rewards_sum'] != 0:
+                    metrics['cumulative_intrinsic_rewards_ratio'] = (
+                        recurrent_metrics['cum_additional_opt_value'] /
+                        recurrent_metrics['cum_intrinsic_rewards_sum']
+                    )
                 if additional_opt_planning_horizon is not None and first_plan_mean_intrinsic_reward is not None:
-                    additional_opt_planning_horizon_value = additional_opt_planning_horizon.item()
-                    first_plan_mean_intrinsic_reward_value = first_plan_mean_intrinsic_reward.item()
-                    recurrent_metrics['cum_additional_opt_planning_horizon_value'] += additional_opt_planning_horizon_value
-                    recurrent_metrics['cum_first_plan_mean_intrinsic_rewards_sum'] += first_plan_mean_intrinsic_reward_value
-                    metrics['additional_opt_planning_horizon'] = additional_opt_planning_horizon_value
-                    metrics['first_plan_mean_intrinsic_rewards'] = first_plan_mean_intrinsic_reward_value
-                    metrics['additional_opt_first_plan_mean_ratio'] = (
-                        additional_opt_planning_horizon_value / first_plan_mean_intrinsic_reward_value
-                        if first_plan_mean_intrinsic_reward_value != 0 else float('inf')
+                    additional_opt_planning_horizon_value = finite_item(additional_opt_planning_horizon)
+                    first_plan_mean_intrinsic_reward_value = finite_item(first_plan_mean_intrinsic_reward)
+                    valid_mean_ratio = (
+                        additional_opt_planning_horizon_value is not None
+                        and first_plan_mean_intrinsic_reward_value is not None
+                        and first_plan_mean_intrinsic_reward_value != 0
                     )
-                    metrics['cumulative_mean_ratio'] = (
-                        recurrent_metrics['cum_additional_opt_planning_horizon_value'] /
-                        recurrent_metrics['cum_first_plan_mean_intrinsic_rewards_sum']
-                        if recurrent_metrics['cum_first_plan_mean_intrinsic_rewards_sum'] != 0 else float('inf')
+                    metrics['additional_opt_planning_horizon_is_finite'] = float(
+                        additional_opt_planning_horizon_value is not None
                     )
+                    metrics['first_plan_mean_intrinsic_rewards_is_finite'] = float(
+                        first_plan_mean_intrinsic_reward_value is not None
+                    )
+                    if valid_mean_ratio:
+                        recurrent_metrics['cum_additional_opt_planning_horizon_value'] += additional_opt_planning_horizon_value
+                        recurrent_metrics['cum_first_plan_mean_intrinsic_rewards_sum'] += first_plan_mean_intrinsic_reward_value
+                        metrics['additional_opt_planning_horizon'] = additional_opt_planning_horizon_value
+                        metrics['first_plan_mean_intrinsic_rewards'] = first_plan_mean_intrinsic_reward_value
+                        metrics['additional_opt_first_plan_mean_ratio'] = (
+                            additional_opt_planning_horizon_value / first_plan_mean_intrinsic_reward_value
+                        )
+                    if recurrent_metrics['cum_first_plan_mean_intrinsic_rewards_sum'] != 0:
+                        metrics['cumulative_mean_ratio'] = (
+                            recurrent_metrics['cum_additional_opt_planning_horizon_value'] /
+                            recurrent_metrics['cum_first_plan_mean_intrinsic_rewards_sum']
+                        )
             if hasattr(self, 'action_cost'):
                 action_tolerance = ToleranceReward(bounds=(-0.1, 0.1), margin=0.1, sigmoid='gaussian')
                 action_penalty = getattr(self, 'action_cost') * jnp.sum(1 - action_tolerance(exploration_actions))
