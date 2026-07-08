@@ -289,7 +289,10 @@ class iCemTO(BaseOptimizer):
             reward_sum = self.summarize_raw_samples(jnp.sum(transitions.reward, axis=-1))
 
             if self.cost_fn is not None:
-                cost = vmap(self.cost_fn)(transitions.observation, transitions.action)
+                cost_actions = transitions.action
+                if hasattr(self.system, 'get_real_action'):
+                    cost_actions = self.system.get_real_action(cost_actions)
+                cost = vmap(self.cost_fn)(transitions.observation, cost_actions)
                 assert cost.shape == (self.opt_params.num_particles,)
                 # We summarize cost with mean or max (if pessimism is true)
                 cost = self.summarize_cost_samples(cost)

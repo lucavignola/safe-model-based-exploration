@@ -45,7 +45,7 @@ def experiment(
     import jax.random as jr
     import chex
     import wandb
-    from smbrl.agent.actsafe import ActSafeAgent, SafeHUCRL
+    from smbrl.agent.actsafe import ActSafeAgent, HUCRL, SafeHUCRL
     from smbrl.agent.sbsrl import SBSRLAgent, Task
     from flax import struct
     from distrax import Normal
@@ -267,7 +267,7 @@ def experiment(
     elif alg_name == 'ActSafe':
         alg = ActSafeAgent
     elif alg_name == 'HUCRL':
-        alg = SafeHUCRL
+        alg = HUCRL
         lambda_constraint = 0.0
     elif alg_name == 'OPAX':
         alg = ActSafeAgent

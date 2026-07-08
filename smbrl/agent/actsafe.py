@@ -22,7 +22,12 @@ from jaxtyping import Key, Array, PyTree, Float
 from smbrl.mbpo_stubs import Reward, RewardParams, rollout_actions
 from optax import Schedule, constant_schedule
 
-from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
+from smbrl.model_based_rl.active_exploration_system import (
+    ExplorationSystem,
+    ExplorationReward,
+    ExplorationDynamics,
+    HallucinatedExplorationDynamics,
+)
 from smbrl.model_based_rl.active_exploration_system import cartpole_known_action_effect
 from smbrl.model_based_rl.active_exploration_system import pendulum_known_action_effect
 from smbrl.optimizer.icem import iCemParams, iCemTO, AbstractCost
@@ -102,19 +107,30 @@ class SafeModelBasedAgent:
                                         stats_model_state=model_state)
         return model_state
 
+    def get_planning_dynamics(self,
+                              use_log: bool = True,
+                              scale_with_aleatoric_std: bool = True,
+                              use_mean_dynamics: bool | None = None) -> ExplorationDynamics:
+        if use_mean_dynamics is None:
+            use_mean_dynamics = self.use_mean_dynamics
+        return ExplorationDynamics(
+            x_dim=self.env.observation_size,
+            u_dim=self.env.action_size,
+            model=self.model,
+            use_log=use_log,
+            scale_with_aleatoric_std=scale_with_aleatoric_std,
+            use_mean_dynamics=use_mean_dynamics,
+            aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
+            prior_knowledge=self.prior_knowledge,
+            prior_num_steps=self.action_repeat,
+        )
+
     def test_a_task(self,
                     model_state: ModelState,
                     key: Key[Array, '2'],
                     task: Task,
                     ) -> Tuple[State, Float[Array, '... action_dim'], Float[Array, 'episode_length 1'], Metrics]:
-        exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
-                                                   u_dim=self.env.action_size,
-                                                   model=self.model,
-                                                   use_mean_dynamics=self.use_mean_dynamics,
-                                                   aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
-                                                   prior_knowledge=self.prior_knowledge,
-                                                   prior_num_steps=self.action_repeat,
-                                                   )
+        exploration_dynamics = self.get_planning_dynamics()
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
             reward=task.reward,
@@ -124,7 +140,7 @@ class SafeModelBasedAgent:
         if self.optimizer == 'icem':
             optimizer = iCemTO(
                 horizon=self.icem_horizon,
-                action_dim=self.env.action_size,
+                action_dim=learned_system.u_dim,
                 key=subkey,
                 opt_params=self.icem_params,
                 system=learned_system,
@@ -157,7 +173,8 @@ class SafeModelBasedAgent:
         actions = []
 
         for i in range(self.episode_length):
-            action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
+            planner_action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
+            action = learned_system.get_real_action(planner_action)
             for _ in range(self.action_repeat):
                 env_state = self.env.step(env_state, action)
             collected_states.append(env_state)
@@ -302,16 +319,10 @@ class SafeModelBasedAgent:
             Array, 'episode_length 1'], Float[Array, '1'], Data, chex.Array]:
         reward = self.get_train_rewards()
 
-        exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
-                                                   u_dim=self.env.action_size,
-                                                   model=self.model,
-                                                   use_log=False,
-                                                   scale_with_aleatoric_std=False,
-                                                   use_mean_dynamics=self.use_mean_dynamics,
-                                                   aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
-                                                   prior_knowledge=self.prior_knowledge,
-                                                   prior_num_steps=self.action_repeat,
-                                                   )
+        exploration_dynamics = self.get_planning_dynamics(
+            use_log=False,
+            scale_with_aleatoric_std=False,
+        )
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
             reward=reward,
@@ -321,7 +332,7 @@ class SafeModelBasedAgent:
         if self.optimizer == 'icem':
             optimizer = iCemTO(
                 horizon=self.icem_horizon,
-                action_dim=self.env.action_size,
+                action_dim=learned_system.u_dim,
                 key=subkey,
                 opt_params=self.icem_params,
                 system=learned_system,
@@ -357,7 +368,8 @@ class SafeModelBasedAgent:
         first_plan_mean_intrinsic_reward = None
         # TODO: Should implement treatment of done flags
         for i in range(self.episode_length):
-            action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
+            planner_action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
+            action = learned_system.get_real_action(planner_action)
             print(f'Step {i}: reward is {optimizer_state.best_reward}')
             decision_state = env_state.obs
             if i == 0 and self.enable_additional_exploration_optimizer:
@@ -677,6 +689,25 @@ class SafeHUCRL(SafeModelBasedAgent):
     def __init__(self, train_task_index: int = 0, *args, **kwargs):
         assert train_task_index >= 0
         super().__init__(train_task_index=train_task_index, *args, **kwargs)
+
+
+class HUCRL(SafeHUCRL):
+    def get_planning_dynamics(self,
+                              use_log: bool = True,
+                              scale_with_aleatoric_std: bool = True,
+                              use_mean_dynamics: bool | None = None) -> HallucinatedExplorationDynamics:
+        del use_mean_dynamics
+        return HallucinatedExplorationDynamics(
+            x_dim=self.env.observation_size,
+            u_dim=self.env.action_size,
+            model=self.model,
+            use_log=use_log,
+            scale_with_aleatoric_std=scale_with_aleatoric_std,
+            use_mean_dynamics=True,
+            aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
+            prior_knowledge=self.prior_knowledge,
+            prior_num_steps=self.action_repeat,
+        )
 
 
 if __name__ == '__main__':

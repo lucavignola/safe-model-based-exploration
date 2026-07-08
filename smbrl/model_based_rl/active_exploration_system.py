@@ -116,6 +116,83 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         return cartpole_known_action_effect(x, u, predict_difference, self.prior_num_steps)
 
 
+class HallucinatedExplorationDynamics(ExplorationDynamics[ModelState]):
+    """H-UCRL dynamics with augmented controls (real action, eta).
+
+    The hallucinated part eta has one entry per state dimension and shifts the
+    model prediction inside the beta-scaled epistemic confidence interval.
+    """
+
+    def __init__(self,
+                 x_dim: int,
+                 u_dim: int,
+                 model: StatisticalModel,
+                 use_log: bool = True,
+                 scale_with_aleatoric_std: bool = True,
+                 aleatoric_noise_in_prediction: bool = True,
+                 predict_difference: bool = True,
+                 use_mean_dynamics: bool = False,
+                 prior_knowledge: str = "none",
+                 prior_num_steps: int = 1,
+                 ):
+        real_u_dim = u_dim
+        super().__init__(
+            x_dim=x_dim,
+            u_dim=real_u_dim + x_dim,
+            model=model,
+            use_log=use_log,
+            scale_with_aleatoric_std=scale_with_aleatoric_std,
+            aleatoric_noise_in_prediction=aleatoric_noise_in_prediction,
+            predict_difference=predict_difference,
+            use_mean_dynamics=use_mean_dynamics,
+            prior_knowledge=prior_knowledge,
+            prior_num_steps=prior_num_steps,
+        )
+        self.real_u_dim = real_u_dim
+
+    def split_action(self, u: chex.Array) -> tuple[chex.Array, chex.Array]:
+        real_action = u[..., :self.real_u_dim]
+        hallucinated_action = jnp.clip(u[..., self.real_u_dim:], -1.0, 1.0)
+        return real_action, hallucinated_action
+
+    def next_state(self,
+                   x: chex.Array,
+                   u: chex.Array,
+                   dynamics_params: DynamicsParams) -> Tuple[Distribution, DynamicsParams]:
+        assert x.shape == (self.x_dim,) and u.shape == (self.u_dim,)
+        real_action, hallucinated_action = self.split_action(u)
+        z = jnp.concatenate([x, real_action])
+        next_key, _ = jr.split(dynamics_params.key)
+        if self.prior_knowledge == "none":
+            pred = self.model(z, dynamics_params.model_state)
+            known_action_effect = jnp.zeros_like(x)
+        elif self.prior_knowledge == "pendulum":
+            pred = self.model(x, dynamics_params.model_state)
+            known_action_effect = self.pendulum_prior(x, real_action, self.predict_difference)
+        elif self.prior_knowledge == "cartpole":
+            pred = self.model(x, dynamics_params.model_state)
+            known_action_effect = self.cartpole_prior(x, real_action, self.predict_difference)
+        else:
+            raise NotImplementedError(f'Unknown prior knowledge {self.prior_knowledge}')
+        epistemic_std, aleatoric_std = pred.epistemic_std, pred.aleatoric_std
+        beta = pred.statistical_model_state.beta
+        optimistic_shift = beta * epistemic_std * hallucinated_action
+        if self.predict_difference:
+            x_next = x + pred.mean + optimistic_shift
+        else:
+            x_next = pred.mean + optimistic_shift
+        x_next += known_action_effect
+        intrinsic_reward = self.get_intrinsic_reward(epistemic_std, aleatoric_std)
+        intrinsic_reward = jnp.atleast_1d(intrinsic_reward)
+
+        if not self.aleatoric_noise_in_prediction:
+            aleatoric_std = 0 * aleatoric_std
+        x_next_with_reward = jnp.concatenate([x_next, intrinsic_reward], axis=-1)
+        aleatoric_std_with_reward = jnp.concatenate([aleatoric_std, jnp.zeros_like(intrinsic_reward)], axis=-1)
+        new_dynamics_params = dynamics_params.replace(key=next_key)
+        return Normal(loc=x_next_with_reward, scale=aleatoric_std_with_reward), new_dynamics_params
+
+
 def pendulum_deterministic_next_state(x: chex.Array,
                                       u: chex.Array,
                                       dynamics_params: PendulumDynamicsParams | None = None) -> chex.Array:
@@ -263,6 +340,11 @@ class ExplorationSystem(System, Generic[ModelState, RewardParams]):
         self.x_dim = dynamics.x_dim
         self.u_dim = dynamics.u_dim
 
+    def get_real_action(self, u: chex.Array) -> chex.Array:
+        if hasattr(self.dynamics, 'real_u_dim'):
+            return u[..., :self.dynamics.real_u_dim]
+        return u
+
     def get_reward(self,
                    x: chex.Array,
                    u: chex.Array,
@@ -271,18 +353,19 @@ class ExplorationSystem(System, Generic[ModelState, RewardParams]):
                    key: jax.random.PRNGKey):
         # x_next includes the next state and the intrinsic reward
         chex.assert_shape(x_next, (self.x_dim + 1,))
+        real_action = self.get_real_action(u)
         if isinstance(self.reward, ExplorationReward):
             # include the intrinsic reward in x_next
-            reward_dist, new_reward_params = self.reward(x, u, reward_params, x_next)
+            reward_dist, new_reward_params = self.reward(x, real_action, reward_params, x_next)
         else:
             # Check if it's an SBSRL reward that needs intrinsic reward
             from smbrl.agent.sbsrl import SBSRLReward
             if isinstance(self.reward, SBSRLReward): #TODO: I think this if can be merged with the one above
                 # SBSRL needs full x_next (with intrinsic reward) like ExplorationReward
-                reward_dist, new_reward_params = self.reward(x, u, reward_params, x_next)
+                reward_dist, new_reward_params = self.reward(x, real_action, reward_params, x_next)
             else:
                 # ignore the last state in x_next which is the intrinsic reward
-                reward_dist, new_reward_params = self.reward(x, u, reward_params, x_next[:-1])
+                reward_dist, new_reward_params = self.reward(x, real_action, reward_params, x_next[:-1])
         reward = reward_dist.sample(seed=key)
         return reward, new_reward_params
 
