@@ -62,7 +62,7 @@ def experiment(
     import jax.numpy as jnp
     import chex
     import wandb
-    from smbrl.agent.actsafe import ActSafeAgent, HUCRL, SafeHUCRL, Task
+    from smbrl.agent.actsafe import ActSafeAgent, GroundTruthAgent, HUCRL, SafeHUCRL, Task
     from smbrl.agent.sbsrl import SBSRLAgent
     from flax import struct
     from distrax import Distribution, Normal
@@ -235,6 +235,9 @@ def experiment(
         alg = ActSafeAgent
     elif alg_name == 'HUCRL':
         alg = HUCRL
+        lambda_constraint = 0.0
+    elif alg_name == 'GroundTruth':
+        alg = GroundTruthAgent
         lambda_constraint = 0.0
     elif alg_name == 'OPAX':
         alg = ActSafeAgent

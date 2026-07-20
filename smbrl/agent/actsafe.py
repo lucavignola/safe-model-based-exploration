@@ -26,6 +26,7 @@ from smbrl.model_based_rl.active_exploration_system import (
     ExplorationSystem,
     ExplorationReward,
     ExplorationDynamics,
+    GroundTruthExplorationDynamics,
     HallucinatedExplorationDynamics,
 )
 from smbrl.model_based_rl.active_exploration_system import cartpole_known_action_effect
@@ -125,6 +126,9 @@ class SafeModelBasedAgent:
             prior_num_steps=self.action_repeat,
         )
 
+    def use_particle_optimism(self) -> bool:
+        return self.use_optimism
+
     def test_a_task(self,
                     model_state: ModelState,
                     key: Key[Array, '2'],
@@ -145,7 +149,7 @@ class SafeModelBasedAgent:
                 opt_params=self.icem_params,
                 system=learned_system,
                 cost_fn=self.cost_fn,
-                use_optimism=self.use_optimism,
+                use_optimism=self.use_particle_optimism(),
                 use_pessimism=self.use_pessimism,
             )
         # elif self.optimizer == 'ipopt':
@@ -337,7 +341,7 @@ class SafeModelBasedAgent:
                 opt_params=self.icem_params,
                 system=learned_system,
                 cost_fn=self.cost_fn,
-                use_optimism=self.use_optimism,
+                use_optimism=self.use_particle_optimism(),
                 use_pessimism=self.use_pessimism,
             )
         # elif self.optimizer == 'ipopt':
@@ -692,6 +696,10 @@ class SafeHUCRL(SafeModelBasedAgent):
 
 
 class HUCRL(SafeHUCRL):
+    def use_particle_optimism(self) -> bool:
+        # H-UCRL optimism comes from eta; process-noise particles estimate an expectation.
+        return False
+
     def get_planning_dynamics(self,
                               use_log: bool = True,
                               scale_with_aleatoric_std: bool = True,
@@ -707,6 +715,39 @@ class HUCRL(SafeHUCRL):
             aleatoric_noise_in_prediction=self.aleatoric_noise_in_prediction,
             prior_knowledge=self.prior_knowledge,
             prior_num_steps=self.action_repeat,
+        )
+
+
+class GroundTruthAgent(SafeHUCRL):
+    """Task agent that plans with the exact deterministic environment dynamics."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.planning_env = copy.deepcopy(self.env)
+        if hasattr(self.planning_env, 'add_process_noise'):
+            self.planning_env.add_process_noise = False
+
+    def train_dynamics_model(self,
+                             model_state: ModelState,
+                             data: Data,
+                             episode_idx: int) -> ModelState:
+        del data, episode_idx
+        return model_state
+
+    def use_particle_optimism(self) -> bool:
+        return False
+
+    def get_planning_dynamics(self,
+                              use_log: bool = True,
+                              scale_with_aleatoric_std: bool = True,
+                              use_mean_dynamics: bool | None = None) -> GroundTruthExplorationDynamics:
+        del use_mean_dynamics
+        return GroundTruthExplorationDynamics(
+            env=self.planning_env,
+            model=self.model,
+            action_repeat=self.action_repeat,
+            use_log=use_log,
+            scale_with_aleatoric_std=scale_with_aleatoric_std,
         )
 
 

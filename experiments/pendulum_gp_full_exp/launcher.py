@@ -92,11 +92,19 @@ _applicable_configs_safehucrl = {'alg_name': ['SafeHUCRL'], 'use_optimism': [1],
                                  } \
                                 | _applicable_configs
 
-_applicable_configs_hucrl = {'alg_name': ['HUCRL'], 'use_optimism': [1], 'use_pessimism': [1],
+_applicable_configs_hucrl = {'alg_name': ['HUCRL'], 'use_optimism': [0], 'use_pessimism': [1],
                              'num_particles': num_particles,
                              'beta': [3.0],
+                             'exponent': [1.0],
                              } \
                             | _applicable_configs
+
+_applicable_configs_ground_truth = {'alg_name': ['GroundTruth'], 'use_optimism': [0], 'use_pessimism': [0],
+                                    'num_particles': [1],
+                                    'beta': [0.0],
+                                    'exponent': [1.0],
+                                    } \
+                                   | _applicable_configs
 
 _applicable_configs_actsafe_mean = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0],
                                     'num_particles': [1],
@@ -109,7 +117,8 @@ all_flags_combinations = dict_permutations(_applicable_configs_sbsrl) #dict_perm
 #+ dict_permutations(_applicable_configs_safehucrl) \
 #+ dict_permutations(_applicable_configs_sbsrl)
 #+ dict_permutations(_applicable_configs_opax) \
- #+ dict_permutations(_applicable_configs_hucrl)
+ #+ dict_permutations(_applicable_configs_hucrl) \
+ #+ dict_permutations(_applicable_configs_ground_truth)
 
 
 

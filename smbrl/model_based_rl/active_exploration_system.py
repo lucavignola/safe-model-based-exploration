@@ -4,6 +4,7 @@ import chex
 import jax.numpy as jnp
 import jax.random
 import jax.random as jr
+from brax.envs.base import Env, State
 from bsm.statistical_model import StatisticalModel
 from bsm.utils.type_aliases import ModelState
 from distrax import Distribution, Normal
@@ -191,6 +192,58 @@ class HallucinatedExplorationDynamics(ExplorationDynamics[ModelState]):
         aleatoric_std_with_reward = jnp.concatenate([aleatoric_std, jnp.zeros_like(intrinsic_reward)], axis=-1)
         new_dynamics_params = dynamics_params.replace(key=next_key)
         return Normal(loc=x_next_with_reward, scale=aleatoric_std_with_reward), new_dynamics_params
+
+
+class GroundTruthExplorationDynamics(ExplorationDynamics[ModelState]):
+    """Planning dynamics backed by a noise-free copy of the real environment."""
+
+    def __init__(self,
+                 env: Env,
+                 model: StatisticalModel,
+                 action_repeat: int = 1,
+                 use_log: bool = True,
+                 scale_with_aleatoric_std: bool = True,
+                 ):
+        super().__init__(
+            x_dim=env.observation_size,
+            u_dim=env.action_size,
+            model=model,
+            use_log=use_log,
+            scale_with_aleatoric_std=scale_with_aleatoric_std,
+            aleatoric_noise_in_prediction=False,
+            use_mean_dynamics=True,
+        )
+        self.env = env
+        self.action_repeat = action_repeat
+
+    def get_intrinsic_reward(self,
+                             epistemic_std: Float[Array, '... observation_dim'],
+                             aleatoric_std: Float[Array, '... observation_dim']) -> Scalar:
+        del aleatoric_std
+        return jnp.zeros((), dtype=epistemic_std.dtype)
+
+    def next_state(self,
+                   x: chex.Array,
+                   u: chex.Array,
+                   dynamics_params: DynamicsParams) -> Tuple[Distribution, DynamicsParams]:
+        assert x.shape == (self.x_dim,) and u.shape == (self.u_dim,)
+        env_state = State(
+            pipeline_state=None,
+            obs=x,
+            reward=jnp.zeros(()),
+            done=jnp.zeros(()),
+        )
+        for _ in range(self.action_repeat):
+            env_state = self.env.step(env_state, u)
+
+        intrinsic_reward = jnp.zeros((1,), dtype=env_state.obs.dtype)
+        x_next_with_reward = jnp.concatenate([env_state.obs, intrinsic_reward])
+        next_key, _ = jr.split(dynamics_params.key)
+        new_dynamics_params = dynamics_params.replace(key=next_key)
+        return Normal(
+            loc=x_next_with_reward,
+            scale=jnp.zeros_like(x_next_with_reward),
+        ), new_dynamics_params
 
 
 def pendulum_deterministic_next_state(x: chex.Array,
