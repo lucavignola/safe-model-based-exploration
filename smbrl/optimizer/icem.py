@@ -181,6 +181,18 @@ class ICemCarry(NamedTuple):
     prev_elites: Float[Array, 'num_elites horizon action_dim']
 
 
+def mask_placeholder_elites(values: chex.Array,
+                            value_sums: chex.Array,
+                            num_samples: int,
+                            iteration: chex.Array) -> tuple[chex.Array, chex.Array]:
+    """Exclude the fixed-shape elite buffer before it contains real elites."""
+    is_placeholder = jnp.arange(values.shape[0]) >= num_samples
+    mask = jnp.logical_and(iteration == 0, is_placeholder)
+    values = jnp.where(mask, -jnp.inf, values)
+    value_sums = jnp.where(mask, -jnp.inf, value_sums)
+    return values, value_sums
+
+
 @chex.dataclass
 class iCemOptimizerState(OptimizerState[DynamicsParams, RewardParams]):
     true_buffer_state: chex.Array = None
@@ -302,7 +314,7 @@ class iCemTO(BaseOptimizer):
         get_curr_best_action = lambda best_val, best_sum, best_seq, val, val_sum, seq: [best_val, best_sum, best_seq]
         num_prev_elites_per_iter = max(int(self.opt_params.elite_set_fraction * self.opt_params.num_elites), 1)
 
-        def step(carry: ICemCarry, ins):
+        def step(carry: ICemCarry, iteration):
             # Split the key
             sampling_rng, particles_rng = jax.random.split(carry.key)
             sampling_rng = jax.random.split(key=sampling_rng, num=self.opt_params.num_samples + 1)
@@ -322,12 +334,18 @@ class iCemTO(BaseOptimizer):
             # Add noise, clip to [u_min, u_max], and reshape back
             action_samples = carry.mean + colored_samples * carry.std
             action_samples = jnp.clip(action_samples, self.opt_params.u_min, self.opt_params.u_max)
-            action_samples = jnp.concatenate([action_samples, prev_elites], axis=0)
+            action_samples = jnp.concatenate([action_samples, carry.prev_elites], axis=0)
 
             # Calculate objective for all the samples
             values, value_sums = jax.vmap(objective)(action_samples, particles_rng)
             assert values.shape == (self.opt_params.num_samples + num_prev_elites_per_iter,)
             assert value_sums.shape == (self.opt_params.num_samples + num_prev_elites_per_iter,)
+            values, value_sums = mask_placeholder_elites(
+                values=values,
+                value_sums=value_sums,
+                num_samples=self.opt_params.num_samples,
+                iteration=iteration,
+            )
 
             # Prepare indices of elite samples (i.e. samples with the highest reward)
             best_elite_idx = jnp.argsort(values, axis=0)[-self.opt_params.num_elites:]
@@ -386,7 +404,8 @@ class iCemTO(BaseOptimizer):
         carry = ICemCarry(key=optimizer_key, mean=mean, std=std, best_value=best_value,
                           best_objective_sum=best_objective_sum, best_sequence=best_sequence,
                           prev_elites=prev_elites)
-        carry, outs = jax.lax.scan(step, carry, xs=None, length=self.opt_params.num_steps)
+        iterations = jnp.arange(self.opt_params.num_steps)
+        carry, outs = jax.lax.scan(step, carry, xs=iterations)
         new_opt_state = new_opt_state.replace(best_sequence=outs[2][-1, ...],
                                               best_reward=outs[0][-1, ...],
                                               best_objective_sum=outs[1][-1, ...])

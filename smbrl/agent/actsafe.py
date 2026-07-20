@@ -100,6 +100,16 @@ class SafeModelBasedAgent:
         self.prior_knowledge = prior_knowledge
         self.enable_additional_exploration_optimizer = False
 
+    def _apply_action_repeat(self,
+                             env_state: State,
+                             action: chex.Array) -> tuple[State, chex.Array]:
+        """Advance all physics steps and return the planner-aligned reward."""
+        env_state = self.env.step(env_state, action)
+        decision_reward = env_state.reward
+        for _ in range(1, self.action_repeat):
+            env_state = self.env.step(env_state, action)
+        return env_state, decision_reward
+
     def train_dynamics_model(self,
                              model_state: ModelState,
                              data: Data,
@@ -383,11 +393,8 @@ class SafeModelBasedAgent:
                     actions=optimizer_state.best_sequence,
                     key=key,
                 )
-            old_state = env_state.obs
-            for _ in range(self.action_repeat):
-                old_state = env_state.obs
-                env_state = self.env.step(env_state, action)
-                extrinsic_rewards.append(env_state.reward)
+            env_state, extrinsic_reward = self._apply_action_repeat(env_state, action)
+            extrinsic_rewards.append(extrinsic_reward)
             # Calculate intrinsic reward
             if self.prior_knowledge == "none":
                 model_input = jnp.concatenate([decision_state, action])

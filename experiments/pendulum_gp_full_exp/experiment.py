@@ -51,6 +51,7 @@ def experiment(
         num_particles: int = 10,
         num_samples: int = 500,
         alpha: float = 0.2,
+        init_std: float = 0.5,
         num_steps: int = 5,
         exponent: int = 2,
         lambda_constraint: float = 1e6,
@@ -180,6 +181,7 @@ def experiment(
         num_particles=num_particles,
         num_samples=num_samples,
         alpha=alpha,
+        init_std=init_std,
         num_steps=num_steps,
         exponent=exponent,
         lambda_constraint=lambda_constraint,
@@ -298,6 +300,7 @@ def experiment(
         num_samples=num_samples,
         num_elites=num_elites,
         alpha=alpha,
+        init_std=init_std,
         num_steps=num_steps,
         exponent=exponent,
         lambda_constraint=lambda_constraint,
@@ -447,6 +450,7 @@ def main(args):
         num_particles=args.num_particles,
         num_samples=args.num_samples,
         alpha=args.alpha,
+        init_std=args.init_std,
         num_steps=args.num_steps,
         exponent=args.exponent,
         lambda_constraint=args.lambda_constraint,
@@ -498,6 +502,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)
     parser.add_argument('--alpha', type=float, default=0.2)
+    parser.add_argument('--init_std', type=float, default=0.5)
     parser.add_argument('--num_steps', type=int, default=5)
     parser.add_argument('--exponent', type=float, default=0.2)
     parser.add_argument('--lambda_constraint', type=float, default=1e6)
