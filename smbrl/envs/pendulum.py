@@ -28,17 +28,39 @@ class PendulumRewardParams:
     angle_cost: chex.Array = struct.field(default_factory=lambda: jnp.array(1.0))
     target_angle: chex.Array = struct.field(default_factory=lambda: jnp.array(0.0))
 
-def sparse_reward_function(theta, omega, u, action_cost):
-    reward = tolerance(jnp.cos(theta), (0.5, 1), 0.1)*tolerance(omega, (-0.5, 0.5), 0.5) - action_cost * (1 - tolerance(u, (-0.5, 0.5), 0.1))
+
+def sparse_reward_function(theta, omega, u, action_cost, lower_bound: float = 0.5):
+    reward = (
+        tolerance(jnp.cos(theta), (lower_bound, 1.0), 0.1)
+        * tolerance(omega, (-0.5, 0.5), 0.5)
+        - action_cost * (1 - tolerance(u, (-0.5, 0.5), 0.1))
+    )
     return reward
+
 
 class PendulumEnv(Env):
     def __init__(self,
                  reward_source: str = 'gym',
                  add_process_noise: bool = False,
                  margin_factor: float = 10.0,
-                 process_noise_scale: Float[Array, "observation_dim"] | None = None,
-                 action_cost: float = 0.0):
+                 process_noise_scale: Float[Array, "physical_state_dim"] | float | None = None,
+                 action_cost: float = 0.0,
+                 sparse_reward_lower_bound: float = 0.5):
+        if not -1.0 <= sparse_reward_lower_bound <= 1.0:
+            raise ValueError('sparse_reward_lower_bound must lie in [-1, 1].')
+
+        if process_noise_scale is None:
+            process_noise_scale = jnp.zeros(2)
+        else:
+            process_noise_scale = jnp.asarray(process_noise_scale)
+            if process_noise_scale.ndim == 0:
+                process_noise_scale = jnp.full((2,), process_noise_scale)
+            if process_noise_scale.shape != (2,):
+                raise ValueError(
+                    'process_noise_scale must be a scalar or have shape (2,) '
+                    'for (theta, angular_velocity).'
+                )
+
         self.dynamics_params = PendulumDynamicsParams()
         self.reward_params = PendulumRewardParams()
         bound = 0.1
@@ -52,15 +74,16 @@ class PendulumEnv(Env):
         self.add_process_noise = add_process_noise
         self.process_noise_scale = process_noise_scale
         self.action_cost = action_cost
+        self.sparse_reward_lower_bound = sparse_reward_lower_bound
 
     def reset(self,
               rng: jax.Array) -> State:
+        info = {'process_noise_key': rng} if self.add_process_noise else {}
         state = State(pipeline_state=None,
                       obs=jnp.array([-1.0, 0.0, 0.0]),
                       reward=jnp.array(0.0),
-                      done=jnp.array(0.0), )
-        if self.add_process_noise:
-            state.info['process_noise_key'] = rng
+                      done=jnp.array(0.0),
+                      info=info)
         return state
 
     def reward(self,
@@ -94,7 +117,13 @@ class PendulumEnv(Env):
         target_angle = self.reward_params.target_angle
         diff_th = theta - target_angle
         diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
-        reward = sparse_reward_function(theta, omega, u, self.action_cost)
+        reward = sparse_reward_function(
+            theta,
+            omega,
+            u,
+            self.action_cost,
+            lower_bound=self.sparse_reward_lower_bound,
+        )
         reward = reward.squeeze()
         return reward
 
@@ -113,14 +142,19 @@ class PendulumEnv(Env):
         newth = th + dx[0] * dt
         newthdot = thdot + dx[-1] * dt
         newthdot = jnp.clip(newthdot, -self.dynamics_params.max_speed, self.dynamics_params.max_speed)
-        next_obs = jnp.asarray([jnp.cos(newth), jnp.sin(newth), newthdot]).reshape(-1)
+        info = state.info
         if self.add_process_noise:
             key = state.info['process_noise_key']
             key, subkey = jax.random.split(key)
-            # We add noise noise to the system
-            next_obs += self.process_noise_scale * jr.normal(key=subkey, shape=(self.observation_size,))
-            # We update the key in the state.info
-            state.info['process_noise_key'] = key
+            physical_noise = self.process_noise_scale * jr.normal(key=subkey, shape=(2,))
+            newth = newth + physical_noise[0]
+            newthdot = jnp.clip(
+                newthdot + physical_noise[1],
+                -self.dynamics_params.max_speed,
+                self.dynamics_params.max_speed,
+            )
+            info = {**state.info, 'process_noise_key': key}
+        next_obs = jnp.asarray([jnp.cos(newth), jnp.sin(newth), newthdot]).reshape(-1)
         if self.reward_source == 'gym':
             next_reward = self.reward(x, action)
         elif self.reward_source == 'dm-control':
@@ -135,7 +169,7 @@ class PendulumEnv(Env):
                            reward=next_reward,
                            done=state.done,
                            metrics=state.metrics,
-                           info=state.info)
+                           info=info)
         return next_state
 
     def ode(self, x_compressed: chex.Array, u: chex.Array) -> chex.Array:

@@ -8,6 +8,39 @@ from smbrl.utils.experiment_utils import Logger, hash_dict, tolerance
 from smbrl.envs.pendulum import sparse_reward_function
 
 
+EPISODE_METRICS = (
+    'intrinsic_rewards',
+    'extrinsic_rewards',
+    'constraint_cost',
+    'additional_opt_is_finite',
+    'additional_opt',
+    'additional_opt_intrinsic_rewards_ratio',
+    'cumulative_intrinsic_rewards_ratio',
+    'additional_opt_planning_horizon_is_finite',
+    'first_plan_mean_intrinsic_rewards_is_finite',
+    'additional_opt_planning_horizon',
+    'first_plan_mean_intrinsic_rewards',
+    'additional_opt_first_plan_mean_ratio',
+    'cumulative_mean_ratio',
+    'sbsrl_action_penalty',
+    'sbsrl_reward_no_exploration_penalty',
+    'sbsrl/eps_sigma',
+    'sbsrl/uncertainty_penalty_mean',
+    'sbsrl/uncertainty_constraint_enabled',
+    'sbsrl/eps_sigma_after_decay',
+)
+
+
+def define_wandb_episode_metrics(wandb, task_names):
+    """Use the simulation episode as the x-axis despite model-training logs."""
+    wandb.define_metric('episode_idx')
+    for metric_name in EPISODE_METRICS:
+        wandb.define_metric(metric_name, step_metric='episode_idx')
+    for task_name in task_names:
+        wandb.define_metric(f'total_reward_{task_name}', step_metric='episode_idx')
+        wandb.define_metric(f'cost_{task_name}', step_metric='episode_idx')
+
+
 def experiment(
         project_name: str = 'ActSafeTest',
         alg_name: str = 'ActSafe',
@@ -27,6 +60,7 @@ def experiment(
         max_abs_velocity: float = 6.0,
         action_cost: float = 0.0,
         sparse_task: bool = False,
+        sparse_reward_lower_bound: float = 0.5,
         num_training_steps: int = 1_000,
         env_margin_factor: float = 10.0,
         process_noise_scale: float = 1e-3,
@@ -80,7 +114,7 @@ def experiment(
 
     from mbrl.utils.offline_data import OfflineData
 
-    env = PendulumEnv()
+    env = PendulumEnv(sparse_reward_lower_bound=sparse_reward_lower_bound)
     if prior_knowledge not in ("none", "pendulum"):
         raise NotImplementedError(f'Unknown prior knowledge {prior_knowledge}')
     model_input_dim = env.observation_size + env.action_size if prior_knowledge == "none" else env.observation_size
@@ -155,6 +189,7 @@ def experiment(
         max_abs_velocity=max_abs_velocity,
         action_cost=action_cost,
         sparse_task=sparse_task,
+        sparse_reward_lower_bound=sparse_reward_lower_bound,
         num_training_steps=num_training_steps,
         env_margin_factor=env_margin_factor,
         process_noise_scale=process_noise_scale,
@@ -199,11 +234,16 @@ def experiment(
         target_angle: chex.Array = struct.field(default_factory=lambda: jnp.array(0.0))
 
     class PendulumReward(Reward):
-        def __init__(self, target_angle: float = 0.0, action_cost: float = 0.0, sparse_task: bool = False):
+        def __init__(self,
+                     target_angle: float = 0.0,
+                     action_cost: float = 0.0,
+                     sparse_task: bool = False,
+                     sparse_reward_lower_bound: float = 0.5):
             super().__init__(x_dim=3, u_dim=1)
             self.target_angle = jnp.array(target_angle)
             self.action_cost = action_cost
             self.sparse_task = sparse_task
+            self.sparse_reward_lower_bound = sparse_reward_lower_bound
 
         def __call__(self,
                      x: chex.Array,
@@ -219,7 +259,13 @@ def experiment(
             diff_th = theta - target_angle
             diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
             if self.sparse_task:
-                reward = sparse_reward_function(theta, omega, u, self.action_cost)
+                reward = sparse_reward_function(
+                    theta,
+                    omega,
+                    u,
+                    self.action_cost,
+                    lower_bound=self.sparse_reward_lower_bound,
+                )
             else:
                 reward = -(reward_params.angle_cost * diff_th ** 2 + 0.1 * omega ** 2) - reward_params.control_cost * u ** 2
             reward = reward.squeeze()
@@ -261,12 +307,12 @@ def experiment(
                             max_abs_velocity=max_abs_velocity,
                             violation_eps=violation_eps, )
 
-    true_env_process_noise_scale = process_noise_scale * jnp.ones(env.observation_size)
     true_env = PendulumEnv(margin_factor=env_margin_factor,
                            reward_source=reward_source,
                            add_process_noise=True,
-                           process_noise_scale=true_env_process_noise_scale,
-                           action_cost=action_cost,)
+                           process_noise_scale=process_noise_scale,
+                           action_cost=action_cost,
+                           sparse_reward_lower_bound=sparse_reward_lower_bound)
 
     # Create agent with appropriate parameters
     agent_kwargs = {
@@ -277,7 +323,11 @@ def experiment(
         'cost_fn': cost_fn,
         'test_tasks': [
             #Task(reward=PendulumReward(target_angle=jnp.pi), name='Keep down', env=env),
-            Task(reward=PendulumReward(action_cost=action_cost, sparse_task=sparse_task), name='Swing up', env=true_env),
+            Task(reward=PendulumReward(action_cost=action_cost,
+                                       sparse_task=sparse_task,
+                                       sparse_reward_lower_bound=sparse_reward_lower_bound),
+                 name='Swing up',
+                 env=true_env),
         ],
         'predict_difference': True,
         'num_training_steps': constant_schedule(num_training_steps),
@@ -336,6 +386,7 @@ def experiment(
             wandb_kwargs['dir'] = logs_dir
 
         wandb.init(**wandb_kwargs)
+        define_wandb_episode_metrics(wandb, [task.name for task in agent.test_tasks])
 
     model_state = model.init(jr.PRNGKey(seed))
     # if num_offline_data > 0:
@@ -421,6 +472,7 @@ def main(args):
         lambda_sigma=args.lambda_sigma,
         action_cost=args.action_cost,
         sparse_task=args.sparse_task,
+        sparse_reward_lower_bound=args.sparse_reward_lower_bound,
         uncertainty_eps=args.uncertainty_eps,
         uncertainty_decay_factor=args.uncertainty_decay_factor,
         uncertainty_decay_mode=args.uncertainty_decay_mode,
@@ -470,6 +522,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_mean_dynamics', action='store_true')
     parser.add_argument('--aleatoric_noise_in_prediction', action='store_true')
     parser.add_argument('--sparse_task', action='store_true')
+    parser.add_argument('--sparse_reward_lower_bound', type=float, default=0.5)
     parser.add_argument('--prior_knowledge', type=str, default='none', choices=['none', 'pendulum'])
 
     # SBSRL-specific parameters

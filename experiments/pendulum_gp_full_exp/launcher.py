@@ -45,6 +45,7 @@ _applicable_configs = {
     'use_mean_dynamics': [True],
     'aleatoric_noise_in_prediction': [True],
     'sparse_task': [False],
+    'sparse_reward_lower_bound': [0.5],
 }
 
 num_particles = [10]
