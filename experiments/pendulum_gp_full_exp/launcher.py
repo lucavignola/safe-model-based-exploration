@@ -11,12 +11,12 @@ HARDWARE_CONFIGS = {
     '4090_rtx': {
         'gpu_type': 'rtx_4090',
         'cpus_per_task': 10,
-        'timeout_min': 180  # Increased from 60 to 180 min (3h)
+        'timeout_min': 240
     },
     'rtx_a6000': {
         'gpu_type': 'rtxa6000',
         'cpus_per_task': 8,
-        'timeout_min': 180  # Increased from 120 to 180 min for consistency
+        'timeout_min': 240
     },
     'cpu_only': {
         'gpu_type': None,
@@ -39,7 +39,7 @@ _applicable_configs = {
     'alpha': [0.8],
     'init_std': [1.0],
     'lambda_constraint': [0],
-    'icem_horizon': [20],
+    'icem_horizon': [50],
     'num_elites': [20],
     'num_offline_data': [0],
     'violation_eps': [0],
@@ -67,6 +67,7 @@ _applicable_configs_opax = {'alg_name': ['OPAX'], 'use_optimism': [1], 'use_pess
 _applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [0], 'use_pessimism': [0],
                              'num_particles': num_particles,
                              'beta': [3.0],
+                             'exponent': [1.0],
                              'lambda_sigma': [0],
                              'action_cost': [0.0],
                              'uncertainty_eps': [0],

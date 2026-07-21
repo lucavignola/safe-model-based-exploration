@@ -7,6 +7,39 @@ from smbrl.utils.experiment_utils import Logger, hash_dict
 from smbrl.envs.cartpole_lenart import sparse_reward_function
 
 
+EPISODE_METRICS = (
+    'intrinsic_rewards',
+    'extrinsic_rewards',
+    'constraint_cost',
+    'additional_opt_is_finite',
+    'additional_opt',
+    'additional_opt_intrinsic_rewards_ratio',
+    'cumulative_intrinsic_rewards_ratio',
+    'additional_opt_planning_horizon_is_finite',
+    'first_plan_mean_intrinsic_rewards_is_finite',
+    'additional_opt_planning_horizon',
+    'first_plan_mean_intrinsic_rewards',
+    'additional_opt_first_plan_mean_ratio',
+    'cumulative_mean_ratio',
+    'sbsrl_action_penalty',
+    'sbsrl_reward_no_exploration_penalty',
+    'sbsrl/eps_sigma',
+    'sbsrl/uncertainty_penalty_mean',
+    'sbsrl/uncertainty_constraint_enabled',
+    'sbsrl/eps_sigma_after_decay',
+)
+
+
+def define_wandb_episode_metrics(wandb, task_names):
+    """Use the simulation episode as the x-axis despite model-training logs."""
+    wandb.define_metric('episode_idx')
+    for metric_name in EPISODE_METRICS:
+        wandb.define_metric(metric_name, step_metric='episode_idx')
+    for task_name in task_names:
+        wandb.define_metric(f'total_reward_{task_name}', step_metric='episode_idx')
+        wandb.define_metric(f'cost_{task_name}', step_metric='episode_idx')
+
+
 def experiment(
         project_name: str = 'ActSafeTest',
         alg_name: str = 'ActSafe',
@@ -16,8 +49,9 @@ def experiment(
         num_particles: int = 10,
         num_samples: int = 500,
         alpha: float = 0.2,
+        init_std: float = 0.5,
         num_steps: int = 5,
-        exponent: int = 2,
+        exponent: float = 1.0,
         lambda_constraint: float = 1e6,
         icem_horizon: int = 20,
         episode_length: int = 50,
@@ -51,6 +85,7 @@ def experiment(
         model_noise_scale: float = 1e-3,
         reward_source: str = 'gym',
         sparse_task: bool = False,
+        sparse_reward_lower_bound: float = 0.5,
         use_mean_dynamics: bool = False,
         aleatoric_noise_in_prediction: bool = True,
         prior_knowledge: str = "none",
@@ -63,7 +98,7 @@ def experiment(
     import jax.numpy as jnp
     import chex
     import wandb
-    from smbrl.agent.actsafe import ActSafeAgent, HUCRL, SafeHUCRL
+    from smbrl.agent.actsafe import ActSafeAgent, GroundTruthAgent, HUCRL, SafeHUCRL
     from smbrl.agent.sbsrl import SBSRLAgent
     from flax import struct
     from distrax import Distribution, Normal
@@ -86,6 +121,7 @@ def experiment(
         num_particles=num_particles,
         num_samples=num_samples,
         alpha=alpha,
+        init_std=init_std,
         num_steps=num_steps,
         exponent=exponent,
         lambda_constraint=lambda_constraint,
@@ -114,10 +150,12 @@ def experiment(
         default_task_index=default_task_index,
         actsafe_index=actsafe_index,
         wandb_notes=wandb_notes,  # Add to config for visibility
+        num_traj=num_traj,
         process_noise_scale=process_noise_scale,
         model_noise_scale=model_noise_scale,
         reward_source=reward_source,
         sparse_task=sparse_task,
+        sparse_reward_lower_bound=sparse_reward_lower_bound,
         use_mean_dynamics=use_mean_dynamics,
         aleatoric_noise_in_prediction=aleatoric_noise_in_prediction,
         prior_knowledge=prior_knowledge,
@@ -157,7 +195,7 @@ def experiment(
     key = jr.PRNGKey(seed)
     key, key_offline_data = jr.split(key)
 
-    env = CartPoleEnv()
+    env = CartPoleEnv(sparse_reward_lower_bound=sparse_reward_lower_bound)
     model_input_dim = env.observation_size + env.action_size if prior_knowledge == "none" else env.observation_size
 
     # Choose data collection method based on num_traj parameter
@@ -197,7 +235,8 @@ def experiment(
     true_env = CartPoleEnv(reward_source=reward_source,
                            add_process_noise=True,
                            process_noise_scale=process_noise_scale,
-                           action_cost=action_cost)
+                           action_cost=action_cost,
+                           sparse_reward_lower_bound=sparse_reward_lower_bound)
 
     if use_precomputed_kernel_params:
         num_training_steps = constant_schedule(0)
@@ -242,11 +281,13 @@ def experiment(
         def __init__(self,
                      target_angle: float = jnp.pi,
                      action_cost: float = 0.0,
-                     sparse_task: bool = False):
+                     sparse_task: bool = False,
+                     sparse_reward_lower_bound: float = 0.5):
             super().__init__(x_dim=5, u_dim=1)
             self.target_angle = jnp.array(target_angle)
             self.action_cost = action_cost
             self.sparse_task = sparse_task
+            self.sparse_reward_lower_bound = sparse_reward_lower_bound
 
         @staticmethod
         def cos_sin_to_angle_representation(cos_sin_angle: Float[Array, '2']) -> Scalar:
@@ -281,6 +322,7 @@ def experiment(
                     u=u,
                     action_cost=self.action_cost,
                     target_angle=target_angle,
+                    lower_bound=self.sparse_reward_lower_bound,
                 )
             else:
                 diff_th = angle - target_angle
@@ -302,6 +344,9 @@ def experiment(
     elif alg_name == 'HUCRL':
         alg = HUCRL
         lambda_constraint = 0.0
+    elif alg_name == 'GroundTruth':
+        alg = GroundTruthAgent
+        lambda_constraint = 0.0
     elif alg_name == 'OPAX':
         alg = ActSafeAgent
         lambda_constraint = 0.0
@@ -313,7 +358,9 @@ def experiment(
     icem_params = iCemParams(
         num_particles=num_particles,
         num_samples=num_samples,
+        num_elites=num_elites,
         alpha=alpha,
+        init_std=init_std,
         num_steps=num_steps,
         exponent=exponent,
         lambda_constraint=lambda_constraint,
@@ -333,7 +380,10 @@ def experiment(
         'test_tasks': [#Task(reward=CartPoleReward(target_angle=0.0), name='Keep down', env=env),
                        Task(reward=CartPoleReward(target_angle=jnp.pi,
                                                   action_cost=action_cost,
-                                                  sparse_task=sparse_task), name='Swing up', env=true_env),
+                                                  sparse_task=sparse_task,
+                                                  sparse_reward_lower_bound=sparse_reward_lower_bound),
+                            name='Swing up',
+                            env=true_env),
                       ],
         'predict_difference': True,
         'num_training_steps': num_training_steps,
@@ -409,10 +459,11 @@ def experiment(
             wandb_kwargs['dir'] = logs_dir
 
         wandb.init(**wandb_kwargs)
+        define_wandb_episode_metrics(wandb, [task.name for task in agent.test_tasks])
     agent.run_episodes(num_episodes=15,
                        key=key,
                        model_state=model_state,
-                       folder_name=f'{alg_name}/{exp_hash}/{logs_dir}/',
+                       folder_name=f'{logs_dir}/{alg_name}/{exp_hash}/',
                        data=offline_data,
                        )
 
@@ -447,6 +498,7 @@ def main(args):
         num_particles=args.num_particles,
         num_samples=args.num_samples,
         alpha=args.alpha,
+        init_std=args.init_std,
         num_steps=args.num_steps,
         exponent=args.exponent,
         lambda_constraint=args.lambda_constraint,
@@ -483,6 +535,7 @@ def main(args):
         model_noise_scale=args.model_noise_scale,
         reward_source=args.reward_source,
         sparse_task=args.sparse_task,
+        sparse_reward_lower_bound=args.sparse_reward_lower_bound,
         use_mean_dynamics=args.use_mean_dynamics,
         aleatoric_noise_in_prediction=args.aleatoric_noise_in_prediction,
         prior_knowledge=args.prior_knowledge,
@@ -500,6 +553,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)
     parser.add_argument('--alpha', type=float, default=0.2)
+    parser.add_argument('--init_std', type=float, default=0.5)
     parser.add_argument('--num_steps', type=int, default=5)
     parser.add_argument('--exponent', type=float, default=1.0)
     parser.add_argument('--lambda_constraint', type=float, default=1e8)
@@ -536,6 +590,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_noise_scale', type=float, default=1e-3)
     parser.add_argument('--reward_source', type=str, default='gym', choices=['gym', 'sparse'])
     parser.add_argument('--sparse_task', action='store_true')
+    parser.add_argument('--sparse_reward_lower_bound', type=float, default=0.5)
     parser.add_argument('--use_mean_dynamics', action='store_true')
     parser.add_argument('--aleatoric_noise_in_prediction', action='store_true')
     parser.add_argument('--prior_knowledge', type=str, default='none', choices=['none', 'cartpole'])

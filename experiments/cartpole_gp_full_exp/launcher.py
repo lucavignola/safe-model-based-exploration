@@ -15,12 +15,12 @@ HARDWARE_CONFIGS = {
     "4090_rtx": {
         "gpu_type": "rtx_4090",
         "cpus_per_task": 10,
-        "timeout_min": 180,  # Increased from 60 to 180 min (3h)
+        "timeout_min": 240,
     },
     "rtx_a6000": {
         "gpu_type": "rtxa6000",
         "cpus_per_task": 8,
-        "timeout_min": 180,  # Increased from 120 to 180 min for consistency
+        "timeout_min": 240,
     },
     "cpu_only": {
         "gpu_type": None,
@@ -37,7 +37,6 @@ _applicable_configs = {
     "seed": list(range(5)),
     "entity": [ENTITY],
     "num_gpus": [NUM_GPUS],
-    "beta": [3.0],
     "lambda_constraint": [0],
     "use_precomputed_kernel_params": [
         0,
@@ -46,71 +45,98 @@ _applicable_configs = {
     "num_offline_data": [0],
     "max_position": [1.5],
     "num_samples": [1000],
-    "icem_horizon": [
-        30,
-    ],
-    "num_elites": [100],
+    "alpha": [0.8],
+    "init_std": [1.0],
+    "icem_horizon": [50],
+    "num_elites": [20],
     "num_steps": [5],
+    "exponent": [1.0],
     "violation_eps":  [0.6],
     "num_traj": [0],  # 0=uniform grid sampling, >0=trajectory-based sampling
     "process_noise_scale": [1e-3],
     "model_noise_scale": [1e-3],
-    "reward_source": ["gym"],
-    "sparse_task": [False],
-    "prior_knowledge": ["none"],
+    "reward_source": ["sparse"],
+    "sparse_task": [True],
+    "sparse_reward_lower_bound": [0.5],
     "action_cost": [0.0],
     "use_mean_dynamics": [True],
     "aleatoric_noise_in_prediction": [True],
 }
 num_particles = [10]
-_applicable_configs_actsafe = {
+_applicable_configs_actsafe = _applicable_configs | {
     "alg_name": ["ActSafe"],
     "use_optimism": [1],
     "use_pessimism": [1],
     "num_particles": num_particles,
+    "beta": [3.0],
+    "prior_knowledge": ["none", "cartpole"],
     "actsafe_index": [-1],
-} | _applicable_configs
+}
 
-_applicable_configs_actsafe_no_pessimism = {
+_applicable_configs_actsafe_no_pessimism = _applicable_configs | {
     "alg_name": ["ActSafe"],
     "use_optimism": [0],
     "use_pessimism": [0],
     "num_particles": [1],
-} | _applicable_configs
+    "beta": [3.0],
+    "prior_knowledge": ["none", "cartpole"],
+}
 
-_applicable_configs_opax = {
+_applicable_configs_opax = _applicable_configs | {
     "alg_name": ["OPAX"],
     "use_optimism": [1],
     "use_pessimism": [1],
     "num_particles": num_particles,
-} | _applicable_configs
+    "beta": [3.0],
+    "prior_knowledge": ["none", "cartpole"],
+}
 
-_applicable_configs_sbsrl = {
+_applicable_configs_sbsrl = _applicable_configs | {
     "alg_name": ["SBSRL"],
     "use_optimism": [0],
     "use_pessimism": [0],
     "num_particles": num_particles,
+    "beta": [3.0],
+    "prior_knowledge": ["none", "cartpole"],
     "lambda_sigma": [0],
     "uncertainty_eps": [0],
     "uncertainty_decay_factor": [1],
     "uncertainty_decay_mode": ["linear"],
     "uncertainty_constraint_threshold": [0],
     "default_task_index": [0],
-} | _applicable_configs
+}
 
-_applicable_configs_safehucrl = {
+_applicable_configs_safehucrl = _applicable_configs | {
     "alg_name": ["SafeHUCRL"],
     "use_optimism": [1],
     "use_pessimism": [1],
     "num_particles": num_particles,
-} | _applicable_configs
+    "beta": [3.0],
+    "prior_knowledge": ["none", "cartpole"],
+}
 
-all_flags_combinations = ( dict_permutations(_applicable_configs_sbsrl)
-#    dict_permutations(_applicable_configs_actsafe)
-#    + dict_permutations(_applicable_configs_actsafe_no_pessimism)
-#     +dict_permutations(_applicable_configs_opax)
-#     dict_permutations(_applicable_configs_sbsrl)
-#    + dict_permutations(_applicable_configs_safehucrl)
+_applicable_configs_hucrl = _applicable_configs | {
+    "alg_name": ["HUCRL"],
+    "use_optimism": [0],
+    "use_pessimism": [0],
+    "num_particles": num_particles,
+    "beta": [3.0],
+    "prior_knowledge": ["none", "cartpole"],
+}
+
+_applicable_configs_ground_truth = _applicable_configs | {
+    "alg_name": ["GroundTruth"],
+    "use_optimism": [0],
+    "use_pessimism": [0],
+    "num_particles": [1],
+    "beta": [0.0],
+    "prior_knowledge": ["none"],
+}
+
+all_flags_combinations = (
+    dict_permutations(_applicable_configs_sbsrl)
+    + dict_permutations(_applicable_configs_hucrl)
+    + dict_permutations(_applicable_configs_ground_truth)
 )
 
 

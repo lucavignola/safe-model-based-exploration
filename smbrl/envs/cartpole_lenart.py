@@ -31,11 +31,18 @@ class CartPoleRewardParams:
     target_angle: chex.Array = struct.field(default_factory=lambda: jnp.array(jnp.pi))
 
 
-def sparse_reward_function(position, angle, linear_velocity, angular_velocity, u, action_cost, target_angle=jnp.pi):
+def sparse_reward_function(position,
+                           angle,
+                           linear_velocity,
+                           angular_velocity,
+                           u,
+                           action_cost,
+                           target_angle=jnp.pi,
+                           lower_bound: float = 0.5):
     diff_th = angle - target_angle
     diff_th = ((diff_th + jnp.pi) % (2 * jnp.pi)) - jnp.pi
     reward = (
-        tolerance(jnp.cos(diff_th), (0.5, 1.0), 0.1)
+        tolerance(jnp.cos(diff_th), (lower_bound, 1.0), 0.1)
         * tolerance(position, (-0.5, 0.5), 0.5)
         * tolerance(linear_velocity, (-0.5, 0.5), 0.5)
         * tolerance(angular_velocity, (-0.5, 0.5), 0.5)
@@ -49,9 +56,22 @@ class CartPoleEnv(Env):
                  reward_source: str = 'gym',
                  init_angle: float = 0.0,
                  add_process_noise: bool = False,
-                 process_noise_scale: Float[Array, 'observation_dim'] | float = 1e-3,
+                 process_noise_scale: Float[Array, 'physical_state_dim'] | float = 1e-3,
                  action_cost: float = 0.0,
+                 sparse_reward_lower_bound: float = 0.5,
                  ):
+        if not -1.0 <= sparse_reward_lower_bound <= 1.0:
+            raise ValueError('sparse_reward_lower_bound must lie in [-1, 1].')
+
+        process_noise_scale = jnp.asarray(process_noise_scale)
+        if process_noise_scale.ndim == 0:
+            process_noise_scale = jnp.full((4,), process_noise_scale)
+        if process_noise_scale.shape != (4,):
+            raise ValueError(
+                'process_noise_scale must be a scalar or have shape (4,) for '
+                '(position, angle, linear_velocity, angular_velocity).'
+            )
+
         self.dynamics_params = CartPoleDynamicsParams()
         self.reward_params = CartPoleRewardParams()
         self.init_angle = init_angle
@@ -59,15 +79,16 @@ class CartPoleEnv(Env):
         self.add_process_noise = add_process_noise
         self.process_noise_scale = process_noise_scale
         self.action_cost = action_cost
+        self.sparse_reward_lower_bound = sparse_reward_lower_bound
 
     def reset(self,
               rng: jax.Array) -> State:
+        info = {'process_noise_key': rng} if self.add_process_noise else {}
         state = State(pipeline_state=None,
                       obs=jnp.array([0.0, jnp.cos(self.init_angle), jnp.sin(self.init_angle), 0.0, 0.0]),
                       reward=jnp.array(0.0),
-                      done=jnp.array(0.0), )
-        if self.add_process_noise:
-            state.info['process_noise_key'] = rng
+                      done=jnp.array(0.0),
+                      info=info)
         return state
 
     @staticmethod
@@ -113,7 +134,15 @@ class CartPoleEnv(Env):
         x_compressed = self.from_obs_to_state(x)
         position, angle = x_compressed[0], x_compressed[1]
         linear_velocity, angular_velocity = x_compressed[2], x_compressed[3]
-        reward = sparse_reward_function(position, angle, linear_velocity, angular_velocity, u, self.action_cost)
+        reward = sparse_reward_function(
+            position,
+            angle,
+            linear_velocity,
+            angular_velocity,
+            u,
+            self.action_cost,
+            lower_bound=self.sparse_reward_lower_bound,
+        )
         reward = reward.squeeze()
         return reward
 
@@ -131,13 +160,14 @@ class CartPoleEnv(Env):
         dx = self.ode(x_compressed, action)
 
         next_x_compressed = x_compressed + dx * dt
-        next_obs = self.from_state_to_obs(next_x_compressed)
-
+        info = state.info
         if self.add_process_noise:
             key = state.info['process_noise_key']
             key, subkey = jr.split(key)
-            next_obs += self.process_noise_scale * jr.normal(key=subkey, shape=(self.observation_size,))
-            state.info['process_noise_key'] = key
+            physical_noise = self.process_noise_scale * jr.normal(key=subkey, shape=(4,))
+            next_x_compressed = next_x_compressed + physical_noise
+            info = {**state.info, 'process_noise_key': key}
+        next_obs = self.from_state_to_obs(next_x_compressed)
 
         if self.reward_source == 'gym':
             next_reward = self.reward(x, action)
@@ -153,7 +183,7 @@ class CartPoleEnv(Env):
                            reward=next_reward,
                            done=state.done,
                            metrics=state.metrics,
-                           info=state.info)
+                           info=info)
         return next_state
 
     def ode(self,
