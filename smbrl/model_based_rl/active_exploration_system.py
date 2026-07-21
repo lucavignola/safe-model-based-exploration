@@ -1,3 +1,4 @@
+from dataclasses import field
 from typing import Generic, Tuple
 
 import chex
@@ -13,11 +14,20 @@ from mbpo.systems.dynamics.base_dynamics import Dynamics
 from mbpo.systems.dynamics.base_dynamics import DynamicsParams as DummyDynamicsParams
 from mbpo.systems.rewards.base_rewards import Reward, RewardParams
 
+from smbrl.dynamics_models.gp_sampling import (
+    RFFPosteriorState,
+    evaluate_rff_posterior,
+)
+
 
 @chex.dataclass
 class DynamicsParams(Generic[ModelState, DummyDynamicsParams]):
     key: chex.PRNGKey
     model_state: ModelState
+    posterior_path_state: RFFPosteriorState | None = None
+    sample_index: chex.Array = field(
+        default_factory=lambda: jnp.asarray(0, dtype=jnp.int32)
+    )
 
 
 class ExplorationDynamics(Dynamics, Generic[ModelState]):
@@ -29,6 +39,8 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                  scale_with_aleatoric_std: bool = True,
                  aleatoric_noise_in_prediction: bool = True,
                  predict_difference: bool = True,
+                 gp_sampling_method: str = "marginal",
+                 rff_path_scale: float | None = None,
                  ):
         Dynamics.__init__(self, x_dim=x_dim, u_dim=u_dim)
         self.model = model
@@ -36,11 +48,27 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         self.scale_with_aleatoric_std = scale_with_aleatoric_std
         self.aleatoric_noise_in_prediction = aleatoric_noise_in_prediction
         self.predict_difference = predict_difference
+        if gp_sampling_method not in {"marginal", "rff"}:
+            raise ValueError(
+                "gp_sampling_method must be one of {'marginal', 'rff'}, "
+                f"got {gp_sampling_method!r}."
+            )
+        self.gp_sampling_method = gp_sampling_method
+        if rff_path_scale is not None and rff_path_scale < 0:
+            raise ValueError(
+                f"rff_path_scale must be non-negative, got {rff_path_scale}."
+            )
+        self.rff_path_scale = rff_path_scale
 
     def init_params(self, key: chex.PRNGKey) -> DynamicsParams:
         param_key, model_state_key = jr.split(key, 2)
         model_state = self.model.init(model_state_key)
-        return DynamicsParams(key=key, model_state=model_state)
+        return DynamicsParams(
+            key=param_key,
+            model_state=model_state,
+            posterior_path_state=None,
+            sample_index=jnp.asarray(0, dtype=jnp.int32),
+        )
 
     def get_intrinsic_reward(self,
                              epistemic_std: Float[Array, '... observation_dim'],
@@ -68,11 +96,43 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         pred = self.model(z, dynamics_params.model_state)
         epistemic_std, aleatoric_std = pred.epistemic_std, pred.aleatoric_std
         beta = pred.statistical_model_state.beta
-        x_next = x
-        if self.predict_difference:
-            x_next += pred.mean + beta * epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
+
+        if self.gp_sampling_method == "marginal":
+            model_prediction = (
+                pred.mean
+                + beta
+                * epistemic_std
+                * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
+            )
         else:
-            x_next = pred.mean + beta * epistemic_std * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
+            if dynamics_params.posterior_path_state is None:
+                raise ValueError(
+                    "RFF dynamics require an episode posterior-path state."
+                )
+            posterior_path_value = evaluate_rff_posterior(
+                model=self.model,
+                model_state=dynamics_params.model_state,
+                posterior_state=dynamics_params.posterior_path_state,
+                input_value=z,
+                path_index=dynamics_params.sample_index,
+            )
+            # Scale 1 is an approximate posterior draw.  A larger explicit
+            # scale keeps the same global path while inflating its residual
+            # around the exact GP mean (e.g. scale=beta for matching the
+            # one-point variance of the marginal sampler).
+            # By default, inherit the GP calibration multiplier so that the
+            # coherent sampler matches the one-point variance used by the
+            # existing marginal sampler.  Passing 1 explicitly gives a
+            # literal approximate posterior path.
+            path_scale = beta if self.rff_path_scale is None else self.rff_path_scale
+            model_prediction = pred.mean + path_scale * (
+                posterior_path_value - pred.mean
+            )
+
+        if self.predict_difference:
+            x_next = x + model_prediction
+        else:
+            x_next = model_prediction
 
         intrinsic_reward = self.get_intrinsic_reward(epistemic_std, aleatoric_std)
         intrinsic_reward = jnp.atleast_1d(intrinsic_reward)

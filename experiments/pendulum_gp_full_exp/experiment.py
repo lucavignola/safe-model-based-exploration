@@ -45,7 +45,12 @@ def experiment(
         default_task_index: int = 0,
         actsafe_index: int = -1,
         wandb_notes: str = None,
+        gp_sampling_method: str = 'marginal',
+        num_rff_features: int = 512,
+        rff_path_scale: float | None = None,
 ):
+    if rff_path_scale is None:
+        rff_path_scale = beta
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
@@ -138,6 +143,9 @@ def experiment(
         uncertainty_constraint_threshold=uncertainty_constraint_threshold,
         default_task_index=default_task_index,
         actsafe_index=actsafe_index,
+        gp_sampling_method=gp_sampling_method,
+        num_rff_features=num_rff_features,
+        rff_path_scale=rff_path_scale,
         wandb_notes=wandb_notes  # Add to config for visibility
     )
 
@@ -233,6 +241,9 @@ def experiment(
         'log_to_wandb': log_wandb,
         'use_pessimism': use_pessimism,
         'use_optimism': use_optimism,
+        'gp_sampling_method': gp_sampling_method,
+        'num_rff_features': num_rff_features,
+        'rff_path_scale': rff_path_scale,
     }
 
     # Add SBSRL-specific parameters if needed
@@ -368,6 +379,9 @@ def main(args):
         uncertainty_constraint_threshold=args.uncertainty_constraint_threshold,
         default_task_index=args.default_task_index,
         actsafe_index=args.actsafe_index,
+        gp_sampling_method=args.gp_sampling_method,
+        num_rff_features=args.num_rff_features,
+        rff_path_scale=args.rff_path_scale,
         wandb_notes=args.wandb_notes,
     )
 
@@ -413,6 +427,13 @@ if __name__ == '__main__':
     parser.add_argument('--default_task_index', type=int, default=0, help='Which task reward to use as extrinsic component in SBSRL')
     parser.add_argument('--actsafe_index', type=int, default=-1, help='Episode index from which ActSafe switches to task-reward exploitation (-1 disables)')
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
+    parser.add_argument('--gp_sampling_method', type=str, default='marginal',
+                        choices=['marginal', 'rff'],
+                        help='Epistemic dynamics sampler used inside iCEM')
+    parser.add_argument('--num_rff_features', type=int, default=512,
+                        help='Number of spectral frequencies per GP output in RFF mode')
+    parser.add_argument('--rff_path_scale', type=float, default=None,
+                        help='Scale of RFF posterior residuals (defaults to --beta; 1 is a literal posterior draw)')
 
     parser.add_argument('--seed', type=int, default=0)
 

@@ -131,21 +131,29 @@ def generate_base_command(module, flags: Optional[Dict[str, Any]] = None, unbuff
 
 def generate_run_commands(command_list: List[str], output_file_list: Optional[List[str]] = None,
                           num_cpus: int = 1, num_gpus: int = 0,
-                          dry: bool = False, mem: int = 2 * 1028, duration: str = '3:59:00',
+                          dry: bool = False, mem: int = 2 * 1028,
+                          duration: Optional[str] = '3:59:00',
                           mode: str = 'local', prompt: bool = True,
                           gpu_type: Optional[str] = None,
+                          partition: Optional[str] = 'gpuhe.24h',
                           ) -> None:
     if mode == 'euler':
         cluster_cmds = []
         bsub_cmd = 'sbatch ' + \
-                   f'--time={duration} ' + \
                    '--mem-per-cpu=10240 ' + \
                    f'--cpus-per-task={num_cpus} ' + \
                    '--tasks-per-node=1 ' + \
                    '--account=ls_krausea ' + \
                    '--job-name=smbrl_exp ' + \
-                   '--partition=gpuhe.24h ' + \
                    '--requeue '
+
+        # ``None`` delegates wall-time and partition selection to Slurm's
+        # account/cluster defaults.  Existing launchers retain the historical
+        # explicit defaults unless they opt out.
+        if duration is not None:
+            bsub_cmd += f'--time={duration} '
+        if partition is not None:
+            bsub_cmd += f'--partition={partition} '
 
         # GPU configuration matching the working Hydra setup
         if num_gpus > 0:

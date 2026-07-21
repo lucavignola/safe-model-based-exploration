@@ -46,7 +46,12 @@ def experiment(
         actsafe_index: int = -1,
         wandb_notes: str = None,
         num_traj: int = 0,
+        gp_sampling_method: str = 'marginal',
+        num_rff_features: int = 512,
+        rff_path_scale: float | None = None,
 ):
+    if rff_path_scale is None:
+        rff_path_scale = beta
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
@@ -104,6 +109,9 @@ def experiment(
         uncertainty_constraint_threshold=uncertainty_constraint_threshold,
         default_task_index=default_task_index,
         actsafe_index=actsafe_index,
+        gp_sampling_method=gp_sampling_method,
+        num_rff_features=num_rff_features,
+        rff_path_scale=rff_path_scale,
         wandb_notes=wandb_notes  # Add to config for visibility
     )
     import jax
@@ -257,6 +265,7 @@ def experiment(
     icem_params = iCemParams(
         num_particles=num_particles,
         num_samples=num_samples,
+        num_elites=num_elites,
         alpha=alpha,
         num_steps=num_steps,
         exponent=exponent,
@@ -285,6 +294,9 @@ def experiment(
         'use_pessimism': use_pessimism,
         'use_optimism': use_optimism,
         'optimizer': optimizer,
+        'gp_sampling_method': gp_sampling_method,
+        'num_rff_features': num_rff_features,
+        'rff_path_scale': rff_path_scale,
     }
 
     # Add SBSRL-specific parameters if needed
@@ -347,7 +359,7 @@ def experiment(
     agent.run_episodes(num_episodes=10,
                        key=key,
                        model_state=model_state,
-                       folder_name=f'{alg_name}/{exp_hash}/{logs_dir}/',
+                       folder_name=f'{logs_dir}/{alg_name}/{exp_hash}/',
                        data=offline_data,
                        )
 
@@ -414,6 +426,9 @@ def main(args):
         actsafe_index=args.actsafe_index,
         wandb_notes=args.wandb_notes,
         num_traj=args.num_traj,
+        gp_sampling_method=args.gp_sampling_method,
+        num_rff_features=args.num_rff_features,
+        rff_path_scale=args.rff_path_scale,
     )
 
 
@@ -460,6 +475,13 @@ if __name__ == '__main__':
     parser.add_argument('--actsafe_index', type=int, default=-1)
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
     parser.add_argument('--num_traj', type=int, default=0, help='Number of trajectories for trajectory-based data collection. 0=use uniform grid sampling')
+    parser.add_argument('--gp_sampling_method', type=str, default='marginal',
+                        choices=['marginal', 'rff'],
+                        help='Epistemic dynamics sampler used inside iCEM')
+    parser.add_argument('--num_rff_features', type=int, default=512,
+                        help='Number of spectral frequencies per GP output in RFF mode')
+    parser.add_argument('--rff_path_scale', type=float, default=None,
+                        help='Scale of RFF posterior residuals (defaults to --beta; 1 is a literal posterior draw)')
 
     parser.add_argument('--seed', type=int, default=0)
 

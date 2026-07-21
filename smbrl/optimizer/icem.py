@@ -208,6 +208,30 @@ class AbstractCost:
         pass
 
 
+def _particle_system_params(system_params, candidate_key, particle_index):
+    """Installs independent, prefix-coupled particle randomness.
+
+    The dynamics key is rooted in the optimizer/system initialization and is
+    therefore fixed for the optimizer lifetime.  Reusing ``particle_index``
+    gives every candidate and iCEM iteration the same epistemic scenario, while
+    ``fold_in`` makes an M sweep nested.  Process noise remains candidate
+    specific and uses the separate outer system key.
+    """
+
+    epistemic_key = jr.fold_in(
+        system_params.dynamics_params.key, particle_index
+    )
+    process_key = jr.fold_in(candidate_key, particle_index)
+    dynamics_updates = {"key": epistemic_key}
+    if hasattr(system_params.dynamics_params, "sample_index"):
+        dynamics_updates["sample_index"] = particle_index
+    dynamics_params = system_params.dynamics_params.replace(**dynamics_updates)
+    return system_params.replace(
+        dynamics_params=dynamics_params,
+        key=process_key,
+    )
+
+
 class iCemTO(BaseOptimizer):
     def __init__(self,
                  horizon: int,
@@ -264,8 +288,12 @@ class iCemTO(BaseOptimizer):
         def objective(seq: Float[Array, 'horizon action_dim'], key: Key[Array, '2']) -> Scalar:
             from jax.nn import relu  # Import at function level #TODO: why? I think this is needed to avoid circular imports with actsafe and sbsrl reward that also use relu
 
-            def optimize_fn(init_state: Float[Array, 'observation_dim'], rng: Key[Array, '2']):
-                system_params = opt_state.system_params.replace(key=rng)
+            def optimize_fn(init_state: Float[Array, 'observation_dim'], particle_index):
+                system_params = _particle_system_params(
+                    system_params=opt_state.system_params,
+                    candidate_key=key,
+                    particle_index=particle_index,
+                )
                 return rollout_actions(system=self.system,
                                        system_params=system_params,
                                        init_state=init_state,
@@ -273,8 +301,12 @@ class iCemTO(BaseOptimizer):
                                        actions=seq,
                                        )
 
-            particles_rng = jr.split(key, self.opt_params.num_particles)
-            transitions = jax.vmap(optimize_fn, in_axes=(None, 0))(initial_state, particles_rng)
+            particle_indices = jnp.arange(
+                self.opt_params.num_particles, dtype=jnp.uint32
+            )
+            transitions = jax.vmap(optimize_fn, in_axes=(None, 0))(
+                initial_state, particle_indices
+            )
             cost = 0
 
             # Standard case: use reward from system

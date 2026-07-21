@@ -22,6 +22,10 @@ from smbrl.mbpo_stubs import Reward, RewardParams
 from optax import Schedule, constant_schedule
 
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
+from smbrl.dynamics_models.gp_sampling import (
+    RFFPosteriorState,
+    sample_rff_posterior,
+)
 from smbrl.optimizer.icem import iCemParams, iCemTO, AbstractCost
 # from smbrl.optimizer.ipopt_optimizer import IPOPTOptimizer, IPOPTParams
 from smbrl.utils.tolerance_reward import ToleranceReward
@@ -53,7 +57,10 @@ class SafeModelBasedAgent:
                  train_task_index: int = -1,
                  use_optimism: bool = True,
                  use_pessimism: bool = True,
-                 optimizer: str = 'icem'  # can be 'icem' or 'ipopt'
+                 optimizer: str = 'icem',  # can be 'icem' or 'ipopt'
+                 gp_sampling_method: str = 'marginal',
+                 num_rff_features: int = 512,
+                 rff_path_scale: float | None = None,
                  ):
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
@@ -83,6 +90,58 @@ class SafeModelBasedAgent:
         self.log_to_wandb = log_to_wandb
         self.optimizer = optimizer
         self.ipopt_params = ipopt_params
+        if gp_sampling_method not in {'marginal', 'rff'}:
+            raise ValueError(
+                "gp_sampling_method must be one of {'marginal', 'rff'}, "
+                f"got {gp_sampling_method!r}."
+            )
+        if num_rff_features < 1:
+            raise ValueError(
+                f'num_rff_features must be positive, got {num_rff_features}.'
+            )
+        self.gp_sampling_method = gp_sampling_method
+        self.num_rff_features = num_rff_features
+        if rff_path_scale is not None and rff_path_scale < 0:
+            raise ValueError(
+                f'rff_path_scale must be non-negative, got {rff_path_scale}.'
+            )
+        self.rff_path_scale = rff_path_scale
+
+    def get_planning_dynamics(self,
+                              use_log: bool = True,
+                              scale_with_aleatoric_std: bool = True) -> ExplorationDynamics:
+        """Constructs the learned dynamics used by every planning rollout."""
+
+        return ExplorationDynamics(
+            x_dim=self.env.observation_size,
+            u_dim=self.env.action_size,
+            model=self.model,
+            use_log=use_log,
+            scale_with_aleatoric_std=scale_with_aleatoric_std,
+            predict_difference=self.predict_difference,
+            gp_sampling_method=self.gp_sampling_method,
+            rff_path_scale=self.rff_path_scale,
+        )
+
+    def sample_episode_posterior_paths(
+            self,
+            model_state: ModelState,
+            episode_key: Key[Array, '2'],
+    ) -> RFFPosteriorState | None:
+        """Samples one RFF bank after the episode's GP posterior update."""
+
+        if self.gp_sampling_method == 'marginal':
+            return None
+        # A fixed tag keeps path sampling separate from control/environment RNGs
+        # and makes changing the sampling method or M leave those streams intact.
+        path_key = jr.fold_in(episode_key, 0x524646)
+        return sample_rff_posterior(
+            model=self.model,
+            model_state=model_state,
+            key=path_key,
+            num_paths=self.icem_params.num_particles,
+            num_features=self.num_rff_features,
+        )
 
     def train_dynamics_model(self,
                              model_state: ModelState,
@@ -96,11 +155,14 @@ class SafeModelBasedAgent:
                     model_state: ModelState,
                     key: Key[Array, '2'],
                     task: Task,
+                    posterior_path_state: RFFPosteriorState | None = None,
                     ) -> Tuple[State, Float[Array, '... action_dim'], Float[Array, 'episode_length 1'], Metrics]:
-        exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
-                                                   u_dim=self.env.action_size,
-                                                   model=self.model,
-                                                   )
+        if posterior_path_state is None:
+            posterior_path_state = self.sample_episode_posterior_paths(
+                model_state=model_state,
+                episode_key=key,
+            )
+        exploration_dynamics = self.get_planning_dynamics()
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
             reward=task.reward,
@@ -133,7 +195,10 @@ class SafeModelBasedAgent:
         key, subkey = jr.split(key)
         optimizer_state = optimizer.init(key=subkey)
 
-        dynamics_params = optimizer_state.system_params.dynamics_params.replace(model_state=model_state)
+        dynamics_params = optimizer_state.system_params.dynamics_params.replace(
+            model_state=model_state,
+            posterior_path_state=posterior_path_state,
+        )
         system_params = optimizer_state.system_params.replace(dynamics_params=dynamics_params)
         optimizer_state = optimizer_state.replace(system_params=system_params)
 
@@ -190,16 +255,20 @@ class SafeModelBasedAgent:
 
     def simulate_on_true_env(self,
                              model_state: ModelState,
-                             key: Key[Array, '2'], ) -> Tuple[
+                             key: Key[Array, '2'],
+                             posterior_path_state: RFFPosteriorState | None = None,
+                             ) -> Tuple[
         PyTree[Array, 'episode_length ...'], Float[Array, 'episode_length action_dim'], Float[
             Array, 'episode_length 1'], Float[
             Array, 'episode_length 1'], Float[Array, '1']]:
         reward = self.get_train_rewards()
 
-        exploration_dynamics = ExplorationDynamics(x_dim=self.env.observation_size,
-                                                   u_dim=self.env.action_size,
-                                                   model=self.model,
-                                                   )
+        if posterior_path_state is None:
+            posterior_path_state = self.sample_episode_posterior_paths(
+                model_state=model_state,
+                episode_key=key,
+            )
+        exploration_dynamics = self.get_planning_dynamics()
         learned_system = ExplorationSystem(
             dynamics=exploration_dynamics,
             reward=reward,
@@ -232,7 +301,10 @@ class SafeModelBasedAgent:
         key, subkey = jr.split(key)
         optimizer_state = optimizer.init(key=subkey)
 
-        dynamics_params = optimizer_state.system_params.dynamics_params.replace(model_state=model_state)
+        dynamics_params = optimizer_state.system_params.dynamics_params.replace(
+            model_state=model_state,
+            posterior_path_state=posterior_path_state,
+        )
         system_params = optimizer_state.system_params.replace(dynamics_params=dynamics_params)
         optimizer_state = optimizer_state.replace(system_params=system_params)
 
@@ -295,11 +367,17 @@ class SafeModelBasedAgent:
                                                     data=data,
                                                     episode_idx=episode_idx)
 
+        posterior_path_state = self.sample_episode_posterior_paths(
+            model_state=model_state,
+            episode_key=key,
+        )
+
         # We collect new data with the current policy
         print(f'Start of data collection')
         exploration_states, exploration_actions, intrinsic_rewards, extrinsic_rewards, cost = self.simulate_on_true_env(
             model_state=model_state,
-            key=key)
+            key=key,
+            posterior_path_state=posterior_path_state)
 
         self.on_exploration_rollout_end(
             episode_idx=episode_idx,
@@ -332,7 +410,12 @@ class SafeModelBasedAgent:
 
         task_outputs = []
         for task in self.test_tasks:
-            task_output = self.test_a_task(model_state=model_state, key=key, task=task)
+            task_output = self.test_a_task(
+                model_state=model_state,
+                key=key,
+                task=task,
+                posterior_path_state=posterior_path_state,
+            )
             task_metrics = task_output[-1]
             task_outputs.append(task_output[:-1])
             if self.log_to_wandb:
