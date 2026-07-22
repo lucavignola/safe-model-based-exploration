@@ -149,12 +149,29 @@ def experiment(
         # Use original uniform grid data collection
         offline_data_sampler = CartPoleOfflineData(action_repeat=action_repeat,
                                                    predict_difference=True)
-        offline_data = offline_data_sampler.sample(key=key_offline_data,
-                                                   num_samples=num_offline_data,
-                                                   max_abs_lin_position=1.0,
-                                                   max_abs_ang_velocity=5.0,
-                                                   max_abs_lin_velocity=5.0,
-                                                   )
+        num_random_offline_data = max(num_offline_data - 1, 0)
+        offline_data = offline_data_sampler.sample(
+            key=key_offline_data,
+            num_samples=num_random_offline_data,
+            max_abs_lin_position=1.0,
+            max_abs_ang_velocity=5.0,
+            max_abs_lin_velocity=5.0,
+        )
+        if num_offline_data > 0:
+            # Keep one exact transition at the stable downward equilibrium in
+            # the data passed to model.update().  Setting model_state.history
+            # alone is insufficient because GP training replaces that history
+            # with this offline dataset.
+            equilibrium_input = jnp.array([0., 1., 0., 0., 0., 0.])
+            equilibrium_output = offline_data_sampler.dynamics_fn(equilibrium_input)
+            offline_data = Data(
+                inputs=jnp.concatenate(
+                    [equilibrium_input[None, :], offline_data.inputs], axis=0
+                ),
+                outputs=jnp.concatenate(
+                    [equilibrium_output[None, :], offline_data.outputs], axis=0
+                ),
+            )
     else:
         # Use trajectory-based data collection
         offline_data_traj = CartPoleTrajectoryOfflineData(action_repeat=1)
