@@ -106,6 +106,9 @@ class SafeModelBasedAgent:
                 f'rff_path_scale must be non-negative, got {rff_path_scale}.'
             )
         self.rff_path_scale = rff_path_scale
+        self.latest_planning_feasible_fraction = 0.0
+        self.latest_planning_any_feasible_fraction = 0.0
+        self.latest_planning_max_selected_cost = 0.0
 
     def get_planning_dynamics(self,
                               use_log: bool = True,
@@ -314,10 +317,16 @@ class SafeModelBasedAgent:
         actions = []
         intrinsic_rewards = []
         extrinsic_rewards = []
+        planning_costs = []
+        planning_feasible = []
+        planning_any_feasible = []
         # TODO: Should implement treatment of done flags
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
             print(f'Step {i}: reward is {optimizer_state.best_reward}')
+            planning_costs.append(optimizer_state.best_cost)
+            planning_feasible.append(optimizer_state.best_feasible)
+            planning_any_feasible.append(optimizer_state.any_feasible)
             for _ in range(self.action_repeat):
                 env_state = self.env.step(env_state, action)
                 extrinsic_rewards.append(env_state.reward)
@@ -335,6 +344,16 @@ class SafeModelBasedAgent:
         actions = jt.map(lambda *xs: jnp.stack(xs), *actions)
         intrinsic_rewards = jt.map(lambda *xs: jnp.stack(xs), *intrinsic_rewards)
         extrinsic_rewards = jt.map(lambda *xs: jnp.stack(xs), *extrinsic_rewards)
+        planning_costs = jnp.stack(planning_costs)
+        planning_feasible = jnp.stack(planning_feasible)
+        planning_any_feasible = jnp.stack(planning_any_feasible)
+        self.latest_planning_feasible_fraction = float(
+            jnp.mean(planning_feasible.astype(jnp.float32))
+        )
+        self.latest_planning_any_feasible_fraction = float(
+            jnp.mean(planning_any_feasible.astype(jnp.float32))
+        )
+        self.latest_planning_max_selected_cost = float(jnp.max(planning_costs))
         costs = self.cost_fn_env(collected_states.obs[:-1], actions)
         return collected_states, actions, intrinsic_rewards, extrinsic_rewards, costs
 
@@ -396,7 +415,10 @@ class SafeModelBasedAgent:
                 'episode_idx': episode_idx,
                 'intrinsic_rewards': jnp.sum(intrinsic_rewards).item(),
                 'extrinsic_rewards': jnp.sum(extrinsic_rewards).item(),
-                'constraint_cost': cost.item()
+                'constraint_cost': cost.item(),
+                'planning_feasible_fraction': self.latest_planning_feasible_fraction,
+                'planning_any_feasible_fraction': self.latest_planning_any_feasible_fraction,
+                'planning_max_selected_cost': self.latest_planning_max_selected_cost,
             }
             if hasattr(self, 'action_cost'):
                 action_tolerance = ToleranceReward(bounds=(-0.1, 0.1), margin=0.1, sigmoid='gaussian')

@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 from jax import vmap
-from jax.nn import relu,gelu
+from jax.nn import relu
 from jax.numpy import sqrt, newaxis
 from jax.numpy.fft import irfft, rfftfreq
 from jaxtyping import Float, Array, Key, Scalar
@@ -176,8 +176,14 @@ class ICemCarry(NamedTuple):
     mean: Float[Array, 'horizon action_dim']
     std: Float[Array, 'horizon action_dim']
     best_value: Scalar
+    best_reward: Scalar
+    best_cost: Scalar
+    best_feasible: chex.Array
+    any_feasible: chex.Array
     best_sequence: Float[Array, 'horizon action_dim']
     prev_elites: Float[Array, 'num_elites horizon action_dim']
+    prev_elite_rewards: Float[Array, 'num_elites']
+    prev_elite_costs: Float[Array, 'num_elites']
 
 
 @chex.dataclass
@@ -186,6 +192,9 @@ class iCemOptimizerState(OptimizerState[DynamicsParams, RewardParams]):
     system_params: chex.Array = None
     best_sequence: chex.Array = None
     best_reward: chex.Array = None
+    best_cost: chex.Array = None
+    best_feasible: chex.Array = None
+    any_feasible: chex.Array = None
     key: chex.Array = None
 
     @property
@@ -214,7 +223,7 @@ def _particle_system_params(system_params, candidate_key, particle_index):
     The dynamics key is rooted in the optimizer/system initialization and is
     therefore fixed for the optimizer lifetime.  Reusing ``particle_index``
     gives every candidate and iCEM iteration the same epistemic scenario, while
-    ``fold_in`` makes an M sweep nested.  Process noise remains candidate
+    ``fold_in`` makes an M sweep nested. Process noise remains candidate
     specific and uses the separate outer system key.
     """
 
@@ -272,6 +281,9 @@ class iCemTO(BaseOptimizer):
             system_params=system_params,
             best_sequence=jnp.zeros(self.opt_dim),
             best_reward=jnp.zeros(1).squeeze(),
+            best_cost=jnp.asarray(jnp.inf),
+            best_feasible=jnp.asarray(False),
+            any_feasible=jnp.asarray(False),
             key=key,
         )
 
@@ -285,9 +297,7 @@ class iCemTO(BaseOptimizer):
 
         # To estimate mean trajectory under some action sequence we sample self.opt_params.num_particles number of
         # noisy realization of the dynamics propagation
-        def objective(seq: Float[Array, 'horizon action_dim'], key: Key[Array, '2']) -> Scalar:
-            from jax.nn import relu  # Import at function level #TODO: why? I think this is needed to avoid circular imports with actsafe and sbsrl reward that also use relu
-
+        def objective(seq: Float[Array, 'horizon action_dim'], key: Key[Array, '2']) -> Tuple[Scalar, Scalar]:
             def optimize_fn(init_state: Float[Array, 'observation_dim'], particle_index):
                 system_params = _particle_system_params(
                     system_params=opt_state.system_params,
@@ -307,20 +317,18 @@ class iCemTO(BaseOptimizer):
             transitions = jax.vmap(optimize_fn, in_axes=(None, 0))(
                 initial_state, particle_indices
             )
-            cost = 0
+            cost = jnp.asarray(0.0)
 
             # Standard case: use reward from system
             reward = self.summarize_raw_samples(jnp.mean(transitions.reward, axis=-1))
-            
+
             if self.cost_fn is not None:
                 cost = vmap(self.cost_fn)(transitions.observation, transitions.action)
                 assert cost.shape == (self.opt_params.num_particles,)
                 # We summarize cost with mean or max (if pessimism is true)
                 cost = self.summarize_cost_samples(cost)
-            return reward - self.opt_params.lambda_constraint * gelu(cost)
+            return reward, cost
 
-        get_best_action = lambda best_val, best_seq, val, seq: [val[-1], seq[-1]]
-        get_curr_best_action = lambda best_val, best_seq, val, seq: [best_val, best_seq]
         num_prev_elites_per_iter = max(int(self.opt_params.elite_set_fraction * self.opt_params.num_elites), 1)
 
         def step(carry: ICemCarry, ins):
@@ -328,7 +336,7 @@ class iCemTO(BaseOptimizer):
             sampling_rng, particles_rng = jax.random.split(carry.key)
             sampling_rng = jax.random.split(key=sampling_rng, num=self.opt_params.num_samples + 1)
             key, sampling_rng = sampling_rng[0], sampling_rng[1:]
-            particles_rng = jr.split(particles_rng, self.opt_params.num_samples + num_prev_elites_per_iter)
+            particles_rng = jr.split(particles_rng, self.opt_params.num_samples)
 
             # We create colored samples from gaussian of size (num_samples, np.prod(self.opt_dim))
             sampling_rng = vmap(lambda x: jr.split(x, self.action_dim))(sampling_rng)
@@ -341,20 +349,33 @@ class iCemTO(BaseOptimizer):
             assert colored_samples.shape == (self.opt_params.num_samples, self.horizon, self.action_dim)
 
             # Add noise, clip to [u_min, u_max], and reshape back
-            action_samples = carry.mean + colored_samples * carry.std
-            action_samples = jnp.clip(action_samples, self.opt_params.u_min, self.opt_params.u_max)
-            action_samples = jnp.concatenate([action_samples, prev_elites], axis=0)
+            new_action_samples = carry.mean + colored_samples * carry.std
+            new_action_samples = jnp.clip(new_action_samples, self.opt_params.u_min, self.opt_params.u_max)
 
-            # Calculate objective for all the samples
-            values = jax.vmap(objective)(action_samples, particles_rng)
-            assert values.shape == (self.opt_params.num_samples + num_prev_elites_per_iter,)
+            # Estimate every candidate with its own process-noise rollouts.
+            # Epistemic GP scenarios remain fixed and prefix-coupled through
+            # _particle_system_params.
+            new_rewards, new_costs = jax.vmap(objective)(new_action_samples, particles_rng)
+            # Pinneri et al.'s elite memory retains the already simulated elite
+            # trajectories rather than rerolling their stochastic outcomes.
+            action_samples = jnp.concatenate([new_action_samples, carry.prev_elites], axis=0)
+            rewards = jnp.concatenate([new_rewards, carry.prev_elite_rewards], axis=0)
+            costs = jnp.concatenate([new_costs, carry.prev_elite_costs], axis=0)
+            expected_shape = (self.opt_params.num_samples + num_prev_elites_per_iter,)
+            assert rewards.shape == expected_shape
+            assert costs.shape == expected_shape
+            penalty_values = rewards - self.opt_params.lambda_constraint * relu(costs)
 
-            # Prepare indices of elite samples (i.e. samples with the highest reward)
-            best_elite_idx = jnp.argsort(values, axis=0)[-self.opt_params.num_elites:]
+            best_elite_idx = jnp.argsort(penalty_values, axis=0)[-self.opt_params.num_elites:]
+            current_best_idx = best_elite_idx[-1]
+            current_reward = rewards[current_best_idx]
+            current_cost = costs[current_best_idx]
+            current_feasible = current_cost <= 0.0
+            current_value = penalty_values[current_best_idx]
+            use_current = current_value > carry.best_value
 
-            # Take elite actions and their values
+            # Take elite actions.
             elites = action_samples[best_elite_idx]
-            elite_values = values[best_elite_idx]
 
             # Compute mean and var of elites actions
             elite_mean = jnp.mean(elites, axis=0)
@@ -367,23 +388,38 @@ class iCemTO(BaseOptimizer):
             # Compute std of the soft updated elites actions
             std = jnp.sqrt(var)
 
-            # Find the best action so far
-            best_elite = elite_values[-1]
-            bests = jax.lax.cond(carry.best_value <= best_elite,
-                                 get_best_action,
-                                 get_curr_best_action,
-                                 carry.best_value,
-                                 carry.best_sequence,
-                                 elite_values,
-                                 elites)
-            best_val, best_seq = bests[0], bests[-1]
-            outs = [best_val, best_seq]
+            # Find the best action so far according to the penalized objective.
+            best_value = jnp.where(use_current, current_value, carry.best_value)
+            best_reward = jnp.where(use_current, current_reward, carry.best_reward)
+            best_cost = jnp.where(use_current, current_cost, carry.best_cost)
+            best_feasible = jnp.where(use_current, current_feasible, carry.best_feasible)
+            any_feasible = jnp.logical_or(carry.any_feasible, jnp.any(costs <= 0.0))
+            best_sequence = jnp.where(
+                use_current,
+                action_samples[current_best_idx],
+                carry.best_sequence,
+            )
+            outs = [best_value, best_sequence]
 
             # Take only num_prev_elites_per_iter elites to the next iteration
             elite_set = elites[-num_prev_elites_per_iter:]
+            elite_reward_set = rewards[best_elite_idx][-num_prev_elites_per_iter:]
+            elite_cost_set = costs[best_elite_idx][-num_prev_elites_per_iter:]
 
-            carry = ICemCarry(key=key, mean=mean, std=std, best_value=best_val, best_sequence=best_seq,
-                              prev_elites=elite_set)
+            carry = ICemCarry(
+                key=key,
+                mean=mean,
+                std=std,
+                best_value=best_value,
+                best_reward=best_reward,
+                best_cost=best_cost,
+                best_feasible=best_feasible,
+                any_feasible=any_feasible,
+                best_sequence=best_sequence,
+                prev_elites=elite_set,
+                prev_elite_rewards=elite_reward_set,
+                prev_elite_costs=elite_cost_set,
+            )
             return carry, outs
 
         best_value = -jnp.inf
@@ -397,12 +433,34 @@ class iCemTO(BaseOptimizer):
         std = jnp.ones(self.opt_dim) * self.opt_params.init_std
         best_sequence = mean
         prev_elites = jnp.zeros((num_prev_elites_per_iter,) + self.opt_dim)
+        # No inner-loop elites exist before the first iteration. Sentinel scores
+        # keep these shape-stabilizing entries out of the initial elite set.
+        prev_elite_rewards = -jnp.inf * jnp.ones((num_prev_elites_per_iter,))
+        prev_elite_costs = jnp.inf * jnp.ones((num_prev_elites_per_iter,))
         optimizer_key, key = jax.random.split(opt_state.key, 2)
         new_opt_state = opt_state.replace(key=key)
-        carry = ICemCarry(key=optimizer_key, mean=mean, std=std, best_value=best_value, best_sequence=best_sequence,
-                          prev_elites=prev_elites)
+        carry = ICemCarry(
+            key=optimizer_key,
+            mean=mean,
+            std=std,
+            best_value=best_value,
+            best_reward=-jnp.inf,
+            best_cost=jnp.inf,
+            best_feasible=jnp.asarray(False),
+            any_feasible=jnp.asarray(False),
+            best_sequence=best_sequence,
+            prev_elites=prev_elites,
+            prev_elite_rewards=prev_elite_rewards,
+            prev_elite_costs=prev_elite_costs,
+        )
         carry, outs = jax.lax.scan(step, carry, xs=None, length=self.opt_params.num_steps)
-        new_opt_state = new_opt_state.replace(best_sequence=outs[1][-1, ...], best_reward=outs[0][-1, ...])
+        new_opt_state = new_opt_state.replace(
+            best_sequence=outs[1][-1, ...],
+            best_reward=outs[0][-1, ...],
+            best_cost=carry.best_cost,
+            best_feasible=carry.best_feasible,
+            any_feasible=carry.any_feasible,
+        )
         return new_opt_state
 
     @partial(jax.jit, static_argnums=0)

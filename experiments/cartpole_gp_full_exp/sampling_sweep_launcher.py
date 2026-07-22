@@ -59,9 +59,7 @@ def build_sweep_configs(
         "num_gpus": [1],
         "num_training_steps": [500],
         "num_samples": [1_000],
-        # The submitted Cartpole launcher recorded 100, but experiment.py did
-        # not forward it; iCEM therefore used its effective default of 50.
-        "num_elites": [50],
+        "num_elites": [100],
         "num_steps": [5],
         "alpha": [0.2],
         "exponent": [1.0],
