@@ -117,7 +117,7 @@ def main(args):
         num_cpus=hardware["cpus_per_task"],
         num_gpus=1,
         mode=args.mode,
-        duration=None,
+        duration="4:00:00",
         prompt=not args.dry_run,
         dry=args.dry_run,
         gpu_type=hardware["gpu_type"],
