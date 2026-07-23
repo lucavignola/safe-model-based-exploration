@@ -26,6 +26,7 @@ from smbrl.dynamics_models.gp_sampling import (
     RFFPriorState,
     RFFPosteriorState,
     append_rff_prior_confidence,
+    evaluate_rff_prior,
     sample_rff_prior,
     sample_rff_posterior,
 )
@@ -67,6 +68,7 @@ class SafeModelBasedAgent:
                  rff_path_scale: float | None = None,
                  gp_sample_truncation: str = 'none',
                  aleatoric_noise_in_prediction: bool = True,
+                 gp_prior_condition_on_initial_data: bool = False,
                  constraint_failure_mode: str = 'recovery',
                  ):
         assert train_task_index >= -1
@@ -143,6 +145,17 @@ class SafeModelBasedAgent:
             )
         self.gp_sample_truncation = gp_sample_truncation
         self.aleatoric_noise_in_prediction = aleatoric_noise_in_prediction
+        self.gp_prior_condition_on_initial_data = (
+            gp_prior_condition_on_initial_data
+        )
+        if (
+                gp_prior_condition_on_initial_data
+                and gp_path_source != 'prior'
+        ):
+            raise ValueError(
+                "gp_prior_condition_on_initial_data=True requires "
+                "gp_path_source='prior'."
+            )
         if (
                 gp_sample_truncation == 'recursive'
                 and gp_path_source != 'prior'
@@ -162,7 +175,10 @@ class SafeModelBasedAgent:
         self.latest_planning_feasible_fraction = 0.0
         self.latest_planning_any_feasible_fraction = 0.0
         self.latest_planning_solver_failure_fraction = 0.0
+        self.latest_planning_solver_failure_count = 0
         self.latest_planning_max_selected_cost = 0.0
+        self.latest_planning_recovery_cost_mean = 0.0
+        self.latest_planning_recovery_cost_max = 0.0
 
     def get_planning_dynamics(self,
                               use_log: bool = True,
@@ -298,6 +314,172 @@ class SafeModelBasedAgent:
             model_state,
         )
 
+    def _visited_path_clipping_metrics(
+            self,
+            states: chex.Array,
+            actions: chex.Array,
+    ) -> dict[str, float]:
+        """Measures recursive clipping at the state-actions actually visited.
+
+        This is a lightweight diagnostic, not a summary over every state-action
+        queried internally by iCEM.
+        """
+
+        prior_state = self._fixed_prior_path_state
+        if (
+                prior_state is None
+                or self.gp_sample_truncation != 'recursive'
+        ):
+            return {}
+
+        state_actions = jnp.concatenate([states, actions], axis=-1)
+        path_indices = jnp.arange(
+            prior_state.num_paths, dtype=jnp.int32
+        )
+        planning_dynamics = self.get_planning_dynamics()
+
+        def evaluate_one_path(z, path_index):
+            raw_value = evaluate_rff_prior(
+                model=self.model,
+                prior_state=prior_state,
+                input_value=z,
+                path_index=path_index,
+            )
+            initial_mean, initial_std = (
+                planning_dynamics._initial_prior_distribution(
+                    z, prior_state
+                )
+            )
+            initial_clipped_value = jnp.clip(
+                raw_value,
+                initial_mean - prior_state.initial_beta * initial_std,
+                initial_mean + prior_state.initial_beta * initial_std,
+            )
+            clipped_value = (
+                planning_dynamics._recursively_truncate_prior_sample(
+                    model_prediction=raw_value,
+                    z=z,
+                    prior_state=prior_state,
+                )
+            )
+            return raw_value, initial_clipped_value, clipped_value
+
+        raw_values, initial_clipped_values, clipped_values = jax.vmap(
+            lambda z: jax.vmap(
+                lambda path_index: evaluate_one_path(z, path_index)
+            )(path_indices)
+        )(state_actions)
+
+        def summarize(prefix, before, after):
+            clipping = jnp.abs(after - before)
+            clipped_elements = clipping > 1e-10
+            clipped_path_points = jnp.any(clipped_elements, axis=-1)
+            return {
+                f'gp/{prefix}_clipping_fraction_elements': float(
+                    jnp.mean(clipped_elements.astype(jnp.float32))
+                ),
+                f'gp/{prefix}_clipping_fraction_path_points': float(
+                    jnp.mean(clipped_path_points.astype(jnp.float32))
+                ),
+                f'gp/{prefix}_clipping_mean_abs': float(
+                    jnp.mean(clipping)
+                ),
+                f'gp/{prefix}_clipping_max_abs': float(
+                    jnp.max(clipping)
+                ),
+            }
+
+        metrics = summarize(
+            'visited_initial_B',
+            raw_values,
+            initial_clipped_values,
+        )
+        metrics.update(summarize(
+            'visited_posterior',
+            initial_clipped_values,
+            clipped_values,
+        ))
+        metrics.update(summarize(
+            'visited_total',
+            raw_values,
+            clipped_values,
+        ))
+        return metrics
+
+    def _visited_gp_calibration_metrics(
+            self,
+            model_state: ModelState,
+            states: chex.Array,
+            actions: chex.Array,
+            next_states: chex.Array,
+    ) -> dict[str, float]:
+        """Evaluates the current GP tube on newly observed transitions.
+
+        The transitions are evaluated before they are added to the GP, so the
+        standardized residual is an out-of-sample diagnostic for the practical
+        confidence multiplier required along the executed trajectory.
+        """
+
+        if not isinstance(self.model, GPStatisticalModel):
+            return {}
+
+        state_actions = jnp.concatenate([states, actions], axis=-1)
+        targets = next_states - states if self.predict_difference else next_states
+
+        def predict_one(z):
+            prediction = self.model(z, model_state)
+            return prediction.mean, prediction.epistemic_std
+
+        means, epistemic_stds = jax.vmap(predict_one)(state_actions)
+        standardized_residuals = (
+            jnp.abs(targets - means)
+            / jnp.maximum(epistemic_stds, 1e-8)
+        )
+        confidence_beta = jnp.atleast_1d(model_state.beta)
+        fixed_prior_path_state = getattr(
+            self, '_fixed_prior_path_state', None
+        )
+        if (
+                fixed_prior_path_state is not None
+                and self.gp_sample_truncation == 'recursive'
+                and not fixed_prior_path_state.confidence_model_states
+        ):
+            # Before the first online update, the active recursive tube is the
+            # initial B sigma_0 tube, including when D0 defines that online
+            # prior. The model state's beta may already include D0 and is not
+            # the coefficient actually used to truncate the fixed paths.
+            confidence_beta = jnp.atleast_1d(
+                fixed_prior_path_state.initial_beta
+            )
+        confidence_beta = jnp.maximum(confidence_beta, 1e-8)
+        confidence_ratios = standardized_residuals / confidence_beta
+
+        metrics = {
+            'gp/visited_standardized_residual_mean': float(
+                jnp.mean(standardized_residuals)
+            ),
+            'gp/visited_standardized_residual_max': float(
+                jnp.max(standardized_residuals)
+            ),
+            'gp/visited_confidence_ratio_mean': float(
+                jnp.mean(confidence_ratios)
+            ),
+            'gp/visited_confidence_ratio_max': float(
+                jnp.max(confidence_ratios)
+            ),
+        }
+        for output_idx in range(standardized_residuals.shape[-1]):
+            metrics[
+                f'gp/visited_active_confidence_beta_{output_idx}'
+            ] = float(confidence_beta[output_idx])
+            metrics[
+                f'gp/visited_standardized_residual_max_{output_idx}'
+            ] = float(jnp.max(standardized_residuals[:, output_idx]))
+            metrics[
+                f'gp/visited_confidence_ratio_max_{output_idx}'
+            ] = float(jnp.max(confidence_ratios[:, output_idx]))
+        return metrics
+
     def train_dynamics_model(self,
                              model_state: ModelState,
                              data: Data,
@@ -383,6 +565,8 @@ class SafeModelBasedAgent:
 
         collected_states = [env_state]
         actions = []
+        planning_solver_failed = []
+        planning_costs = []
 
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
@@ -391,6 +575,10 @@ class SafeModelBasedAgent:
                 step=i,
                 context=f"evaluation task {task.name!r}",
             )
+            planning_solver_failed.append(
+                optimizer_state.constraint_solver_failed
+            )
+            planning_costs.append(optimizer_state.best_cost)
             for _ in range(self.action_repeat):
                 env_state = self.env.step(env_state, action)
             collected_states.append(env_state)
@@ -405,7 +593,21 @@ class SafeModelBasedAgent:
         rewards_dist, _ = jax.vmap(task.reward, in_axes=(0, 0, None, 0))(state, actions, reward_params, next_state)
         rewards = rewards_dist.mean()
         costs = self.cost_fn_env(state, actions)
-        metrics = {f'total_reward_{task.name}': jnp.sum(rewards).item(), f'cost_{task.name}': costs.item()}
+        planning_solver_failed = jnp.stack(planning_solver_failed)
+        planning_costs = jnp.stack(planning_costs)
+        metrics = {
+            f'total_reward_{task.name}': jnp.sum(rewards).item(),
+            f'cost_{task.name}': costs.item(),
+            f'planning_solver_failure_fraction_{task.name}': float(
+                jnp.mean(planning_solver_failed.astype(jnp.float32))
+            ),
+            f'planning_solver_failure_count_{task.name}': int(
+                jnp.sum(planning_solver_failed)
+            ),
+            f'planning_max_selected_cost_{task.name}': float(
+                jnp.max(planning_costs)
+            ),
+        }
         return collected_states, actions, rewards, metrics
 
     def get_train_rewards(self) -> Reward:
@@ -546,7 +748,25 @@ class SafeModelBasedAgent:
         self.latest_planning_solver_failure_fraction = float(
             jnp.mean(planning_solver_failed.astype(jnp.float32))
         )
+        self.latest_planning_solver_failure_count = int(
+            jnp.sum(planning_solver_failed)
+        )
         self.latest_planning_max_selected_cost = float(jnp.max(planning_costs))
+        recovery_costs = jnp.where(
+            planning_solver_failed,
+            planning_costs,
+            0.0,
+        )
+        recovery_count = jnp.maximum(
+            jnp.sum(planning_solver_failed),
+            1,
+        )
+        self.latest_planning_recovery_cost_mean = float(
+            jnp.sum(recovery_costs) / recovery_count
+        )
+        self.latest_planning_recovery_cost_max = float(
+            jnp.max(recovery_costs)
+        )
         costs = self.cost_fn_env(collected_states.obs[:-1], actions)
         position = collected_states.obs[:-1][:, 0]
         trajectory_constraint = jnp.abs(position) - 1.5
@@ -574,14 +794,16 @@ class SafeModelBasedAgent:
                    train_model: bool = True,
                    folder_name: str = 'experiment_2024'
                    ) -> (ModelState, Data):
-        if (
+        initialize_prior = (
                 self.gp_path_source == 'prior'
                 and self._fixed_prior_path_state is None
+        )
+        if (
+                initialize_prior
+                and not self.gp_prior_condition_on_initial_data
         ):
-            # Theory-aligned lifecycle: draw the fixed finite-RFF prior paths
-            # before any D0 update. If offline data are supplied, their
-            # posterior confidence tube is appended below before episode-0
-            # planning.
+            # Unconditioned-prior lifecycle used when no separate D0 defines
+            # the online GP prior.
             model_state = self._initialize_fixed_prior_paths(
                 model_state=model_state,
                 episode_key=key,
@@ -595,9 +817,27 @@ class SafeModelBasedAgent:
                                                     data=data,
                                                     episode_idx=episode_idx)
 
-        if self.gp_path_source == 'prior' and train_model:
-            # Every real-data update, including an optional offline D0 update,
-            # contributes the next beta_n sigma_n tube.
+        if (
+                initialize_prior
+                and self.gp_prior_condition_on_initial_data
+        ):
+            if not train_model:
+                raise ValueError(
+                    "Cannot condition the fixed prior paths on initial data "
+                    "because no initial dataset was supplied."
+                )
+            # D0 defines the online prior itself: sample from its posterior and
+            # use B times that posterior standard deviation as the initial
+            # tube. Do not append D0 again as a recursive confidence tube.
+            model_state = self._initialize_fixed_prior_paths(
+                model_state=model_state,
+                episode_key=key,
+                condition_on_initial_data=True,
+            )
+        elif self.gp_path_source == 'prior' and train_model:
+            # Every subsequent real-data update contributes the next
+            # beta_n sigma_n tube. In the unconditioned-prior lifecycle this
+            # also includes an optional D0 update.
             self._append_fixed_prior_confidence(model_state)
 
         posterior_path_state = self.sample_episode_posterior_paths(
@@ -635,7 +875,13 @@ class SafeModelBasedAgent:
                 'planning_any_feasible_fraction': self.latest_planning_any_feasible_fraction,
                 'planning_solver_failure_fraction':
                     self.latest_planning_solver_failure_fraction,
+                'planning_solver_failure_count':
+                    self.latest_planning_solver_failure_count,
                 'planning_max_selected_cost': self.latest_planning_max_selected_cost,
+                'planning_recovery_cost_mean':
+                    self.latest_planning_recovery_cost_mean,
+                'planning_recovery_cost_max':
+                    self.latest_planning_recovery_cost_max,
             }
             beta_values = jnp.atleast_1d(model_state.beta)
             for output_idx, beta_value in enumerate(beta_values):
@@ -644,6 +890,21 @@ class SafeModelBasedAgent:
                 metrics['gp/recursive_confidence_tubes'] = len(
                     self._fixed_prior_path_state.confidence_model_states
                 )
+                prior_beta_values = jnp.atleast_1d(
+                    self._fixed_prior_path_state.initial_beta
+                )
+                for output_idx, beta_value in enumerate(prior_beta_values):
+                    metrics[f'gp/prior_B_{output_idx}'] = float(beta_value)
+                metrics.update(self._visited_path_clipping_metrics(
+                    states=exploration_states.obs[:-1],
+                    actions=exploration_actions,
+                ))
+            metrics.update(self._visited_gp_calibration_metrics(
+                model_state=model_state,
+                states=exploration_states.obs[:-1],
+                actions=exploration_actions,
+                next_states=exploration_states.obs[1:],
+            ))
             if hasattr(self, 'action_cost'):
                 action_tolerance = ToleranceReward(bounds=(-0.1, 0.1), margin=0.1, sigmoid='gaussian')
                 action_penalty = getattr(self, 'action_cost') * jnp.sum(1 - action_tolerance(exploration_actions))

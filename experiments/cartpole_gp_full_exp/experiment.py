@@ -56,6 +56,7 @@ def experiment(
         rff_path_scale: float | None = None,
         gp_sample_truncation: str = 'none',
         aleatoric_noise_in_prediction: bool = True,
+        gp_prior_condition_on_initial_data: bool = False,
         gp_path_source: str = 'posterior',
         gp_beta_mode: str = 'fixed',
         confidence_delta: float = 0.05,
@@ -132,6 +133,9 @@ def experiment(
         rff_path_scale=rff_path_scale,
         gp_sample_truncation=gp_sample_truncation,
         aleatoric_noise_in_prediction=aleatoric_noise_in_prediction,
+        gp_prior_condition_on_initial_data=(
+            gp_prior_condition_on_initial_data
+        ),
         gp_path_source=gp_path_source,
         gp_beta_mode=gp_beta_mode,
         confidence_delta=confidence_delta,
@@ -391,6 +395,8 @@ def experiment(
         'rff_path_scale': rff_path_scale,
         'gp_sample_truncation': gp_sample_truncation,
         'aleatoric_noise_in_prediction': aleatoric_noise_in_prediction,
+        'gp_prior_condition_on_initial_data':
+            gp_prior_condition_on_initial_data,
         'gp_path_source': gp_path_source,
         'constraint_failure_mode': constraint_failure_mode,
     }
@@ -537,6 +543,9 @@ def main(args):
         aleatoric_noise_in_prediction=bool(
             args.aleatoric_noise_in_prediction
         ),
+        gp_prior_condition_on_initial_data=bool(
+            args.gp_prior_condition_on_initial_data
+        ),
         gp_path_source=args.gp_path_source,
         gp_beta_mode=args.gp_beta_mode,
         confidence_delta=args.confidence_delta,
@@ -576,8 +585,8 @@ if __name__ == '__main__':
         choices=['recovery', 'raise'],
         default='recovery',
         help=(
-            'Raise before executing an infeasible recovery sequence, or keep '
-            'the legacy always-return-an-action behavior.'
+            'Raise before executing an infeasible sequence, or execute the '
+            'least-violating candidate and report recovery diagnostics.'
         ),
     )
     parser.add_argument(
@@ -645,6 +654,16 @@ if __name__ == '__main__':
         help=(
             'Whether planning rollouts sample the GP likelihood scale as '
             'stepwise process noise.'
+        ),
+    )
+    parser.add_argument(
+        '--gp_prior_condition_on_initial_data',
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help=(
+            'Sample whole-run prior paths after conditioning on D0 (1), '
+            'or from the unconditioned GP prior (0).'
         ),
     )
     parser.add_argument(
