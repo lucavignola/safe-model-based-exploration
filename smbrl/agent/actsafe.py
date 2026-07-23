@@ -345,16 +345,6 @@ class SafeModelBasedAgent:
                 input_value=z,
                 path_index=path_index,
             )
-            initial_mean, initial_std = (
-                planning_dynamics._initial_prior_distribution(
-                    z, prior_state
-                )
-            )
-            initial_clipped_value = jnp.clip(
-                raw_value,
-                initial_mean - prior_state.initial_beta * initial_std,
-                initial_mean + prior_state.initial_beta * initial_std,
-            )
             clipped_value = (
                 planning_dynamics._recursively_truncate_prior_sample(
                     model_prediction=raw_value,
@@ -362,49 +352,47 @@ class SafeModelBasedAgent:
                     prior_state=prior_state,
                 )
             )
-            return raw_value, initial_clipped_value, clipped_value
+            return raw_value, clipped_value
 
-        raw_values, initial_clipped_values, clipped_values = jax.vmap(
+        raw_values, clipped_values = jax.vmap(
             lambda z: jax.vmap(
                 lambda path_index: evaluate_one_path(z, path_index)
             )(path_indices)
         )(state_actions)
 
-        def summarize(prefix, before, after):
-            clipping = jnp.abs(after - before)
-            clipped_elements = clipping > 1e-10
-            clipped_path_points = jnp.any(clipped_elements, axis=-1)
-            return {
-                f'gp/{prefix}_clipping_fraction_elements': float(
-                    jnp.mean(clipped_elements.astype(jnp.float32))
-                ),
-                f'gp/{prefix}_clipping_fraction_path_points': float(
-                    jnp.mean(clipped_path_points.astype(jnp.float32))
-                ),
-                f'gp/{prefix}_clipping_mean_abs': float(
-                    jnp.mean(clipping)
-                ),
-                f'gp/{prefix}_clipping_max_abs': float(
-                    jnp.max(clipping)
-                ),
-            }
+        clipping = jnp.abs(clipped_values - raw_values)
+        clipped_path_points = jnp.any(clipping > 1e-10, axis=-1)
 
-        metrics = summarize(
-            'visited_initial_B',
-            raw_values,
-            initial_clipped_values,
-        )
-        metrics.update(summarize(
-            'visited_posterior',
-            initial_clipped_values,
-            clipped_values,
-        ))
-        metrics.update(summarize(
-            'visited_total',
-            raw_values,
-            clipped_values,
-        ))
-        return metrics
+        def empty_intersection_at(z):
+            initial_mean, initial_std = (
+                planning_dynamics._initial_prior_distribution(
+                    z, prior_state
+                )
+            )
+            lower = initial_mean - prior_state.initial_beta * initial_std
+            upper = initial_mean + prior_state.initial_beta * initial_std
+            for confidence_model_state in (
+                    prior_state.confidence_model_states
+            ):
+                prediction = self.model(z, confidence_model_state)
+                radius = (
+                    prediction.statistical_model_state.beta
+                    * prediction.epistemic_std
+                )
+                lower = jnp.maximum(lower, prediction.mean - radius)
+                upper = jnp.minimum(upper, prediction.mean + radius)
+            return lower > upper
+
+        empty_intersections = jax.vmap(empty_intersection_at)(state_actions)
+        return {
+            'gp/visited_clipping_fraction_path_points': float(
+                jnp.mean(clipped_path_points.astype(jnp.float32))
+            ),
+            'gp/visited_clipping_max_abs': float(jnp.max(clipping)),
+            'gp/visited_empty_confidence_intersection_fraction': float(
+                jnp.mean(empty_intersections.astype(jnp.float32))
+            ),
+        }
 
     def _visited_gp_calibration_metrics(
             self,
@@ -454,31 +442,14 @@ class SafeModelBasedAgent:
         confidence_beta = jnp.maximum(confidence_beta, 1e-8)
         confidence_ratios = standardized_residuals / confidence_beta
 
-        metrics = {
-            'gp/visited_standardized_residual_mean': float(
-                jnp.mean(standardized_residuals)
-            ),
+        return {
             'gp/visited_standardized_residual_max': float(
                 jnp.max(standardized_residuals)
-            ),
-            'gp/visited_confidence_ratio_mean': float(
-                jnp.mean(confidence_ratios)
             ),
             'gp/visited_confidence_ratio_max': float(
                 jnp.max(confidence_ratios)
             ),
         }
-        for output_idx in range(standardized_residuals.shape[-1]):
-            metrics[
-                f'gp/visited_active_confidence_beta_{output_idx}'
-            ] = float(confidence_beta[output_idx])
-            metrics[
-                f'gp/visited_standardized_residual_max_{output_idx}'
-            ] = float(jnp.max(standardized_residuals[:, output_idx]))
-            metrics[
-                f'gp/visited_confidence_ratio_max_{output_idx}'
-            ] = float(jnp.max(confidence_ratios[:, output_idx]))
-        return metrics
 
     def train_dynamics_model(self,
                              model_state: ModelState,
@@ -565,8 +536,6 @@ class SafeModelBasedAgent:
 
         collected_states = [env_state]
         actions = []
-        planning_solver_failed = []
-        planning_costs = []
 
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
@@ -575,10 +544,6 @@ class SafeModelBasedAgent:
                 step=i,
                 context=f"evaluation task {task.name!r}",
             )
-            planning_solver_failed.append(
-                optimizer_state.constraint_solver_failed
-            )
-            planning_costs.append(optimizer_state.best_cost)
             for _ in range(self.action_repeat):
                 env_state = self.env.step(env_state, action)
             collected_states.append(env_state)
@@ -593,20 +558,9 @@ class SafeModelBasedAgent:
         rewards_dist, _ = jax.vmap(task.reward, in_axes=(0, 0, None, 0))(state, actions, reward_params, next_state)
         rewards = rewards_dist.mean()
         costs = self.cost_fn_env(state, actions)
-        planning_solver_failed = jnp.stack(planning_solver_failed)
-        planning_costs = jnp.stack(planning_costs)
         metrics = {
             f'total_reward_{task.name}': jnp.sum(rewards).item(),
             f'cost_{task.name}': costs.item(),
-            f'planning_solver_failure_fraction_{task.name}': float(
-                jnp.mean(planning_solver_failed.astype(jnp.float32))
-            ),
-            f'planning_solver_failure_count_{task.name}': int(
-                jnp.sum(planning_solver_failed)
-            ),
-            f'planning_max_selected_cost_{task.name}': float(
-                jnp.max(planning_costs)
-            ),
         }
         return collected_states, actions, rewards, metrics
 
@@ -871,30 +825,12 @@ class SafeModelBasedAgent:
                 'extrinsic_rewards': jnp.sum(extrinsic_rewards).item(),
                 'constraint_cost': cost.item(),
                 'trajectory_constraint': trajectory_constraint.item(),
-                'planning_feasible_fraction': self.latest_planning_feasible_fraction,
-                'planning_any_feasible_fraction': self.latest_planning_any_feasible_fraction,
                 'planning_solver_failure_fraction':
                     self.latest_planning_solver_failure_fraction,
-                'planning_solver_failure_count':
-                    self.latest_planning_solver_failure_count,
-                'planning_max_selected_cost': self.latest_planning_max_selected_cost,
-                'planning_recovery_cost_mean':
-                    self.latest_planning_recovery_cost_mean,
                 'planning_recovery_cost_max':
                     self.latest_planning_recovery_cost_max,
             }
-            beta_values = jnp.atleast_1d(model_state.beta)
-            for output_idx, beta_value in enumerate(beta_values):
-                metrics[f'gp/beta_{output_idx}'] = float(beta_value)
             if self._fixed_prior_path_state is not None:
-                metrics['gp/recursive_confidence_tubes'] = len(
-                    self._fixed_prior_path_state.confidence_model_states
-                )
-                prior_beta_values = jnp.atleast_1d(
-                    self._fixed_prior_path_state.initial_beta
-                )
-                for output_idx, beta_value in enumerate(prior_beta_values):
-                    metrics[f'gp/prior_B_{output_idx}'] = float(beta_value)
                 metrics.update(self._visited_path_clipping_metrics(
                     states=exploration_states.obs[:-1],
                     actions=exploration_actions,

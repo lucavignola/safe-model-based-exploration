@@ -299,6 +299,50 @@ def _hard_constraint_elite_indices(
     return ranking[-num_elites:]
 
 
+def _hard_constraint_elite_moments(
+        elites: chex.Array,
+        elite_rewards: chex.Array,
+        elite_costs: chex.Array,
+        constraint_tolerance: float,
+) -> tuple[chex.Array, chex.Array]:
+    """Computes CEM moments without mixing infeasible and feasible elites.
+
+    When at least one elite is feasible, only feasible elites define the next
+    proposal distribution. Otherwise all recovery elites contribute, so CEM
+    continues minimizing violation. This matters when the feasible set is
+    narrow and fewer than ``num_elites`` feasible candidates were sampled.
+    """
+
+    finite = jnp.logical_and(
+        jnp.isfinite(elite_rewards),
+        jnp.isfinite(elite_costs),
+    )
+    feasible = jnp.logical_and(
+        finite,
+        elite_costs <= constraint_tolerance,
+    )
+    feasible_weights = feasible.astype(elites.dtype)
+    feasible_count = jnp.sum(feasible_weights)
+    normalized_weights = feasible_weights / jnp.maximum(feasible_count, 1.0)
+    broadcast_weights = normalized_weights.reshape(
+        (normalized_weights.shape[0],)
+        + (1,) * (elites.ndim - 1)
+    )
+    feasible_mean = jnp.sum(broadcast_weights * elites, axis=0)
+    feasible_var = jnp.sum(
+        broadcast_weights * jnp.square(elites - feasible_mean),
+        axis=0,
+    )
+
+    recovery_mean = jnp.mean(elites, axis=0)
+    recovery_var = jnp.var(elites, axis=0)
+    has_feasible = feasible_count > 0
+    return (
+        jnp.where(has_feasible, feasible_mean, recovery_mean),
+        jnp.where(has_feasible, feasible_var, recovery_var),
+    )
+
+
 class iCemTO(BaseOptimizer):
     def __init__(self,
                  horizon: int,
@@ -468,6 +512,19 @@ class iCemTO(BaseOptimizer):
                 new_action_samples = new_action_samples.at[-1].set(
                     mean_candidate
                 )
+                if self.opt_params.num_samples >= 2:
+                    # The neutral sequence is a useful second deterministic
+                    # anchor for systems whose known equilibrium action is
+                    # zero. It costs one proposal and is always re-evaluated
+                    # under the current state and confidence scenarios.
+                    neutral_candidate = jnp.clip(
+                        jnp.zeros_like(carry.mean),
+                        self.opt_params.u_min,
+                        self.opt_params.u_max,
+                    )
+                    new_action_samples = new_action_samples.at[-2].set(
+                        neutral_candidate
+                    )
 
             # Estimate every candidate with its own process-noise rollouts.
             # Epistemic GP scenarios remain fixed and prefix-coupled through
@@ -552,9 +609,21 @@ class iCemTO(BaseOptimizer):
             # Take elite actions.
             elites = action_samples[best_elite_idx]
 
-            # Compute mean and var of elites actions
-            elite_mean = jnp.mean(elites, axis=0)
-            elite_var = jnp.var(elites, axis=0)
+            # Once feasibility is discovered, infeasible recovery elites must
+            # not pull the proposal distribution back out of a narrow feasible
+            # region merely because fewer than num_elites candidates were safe.
+            if self.opt_params.constraint_mode == "hard":
+                elite_mean, elite_var = _hard_constraint_elite_moments(
+                    elites=elites,
+                    elite_rewards=rewards[best_elite_idx],
+                    elite_costs=costs[best_elite_idx],
+                    constraint_tolerance=(
+                        self.opt_params.constraint_tolerance
+                    ),
+                )
+            else:
+                elite_mean = jnp.mean(elites, axis=0)
+                elite_var = jnp.var(elites, axis=0)
 
             # Do soft update of the mean and var
             mean = carry.mean * self.opt_params.alpha + (1 - self.opt_params.alpha) * elite_mean
