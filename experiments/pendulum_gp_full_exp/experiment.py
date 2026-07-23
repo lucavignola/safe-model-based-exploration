@@ -48,6 +48,7 @@ def experiment(
         gp_sampling_method: str = 'marginal',
         num_rff_features: int = 512,
         rff_path_scale: float | None = None,
+        gp_sample_truncation: str = 'none',
 ):
     if rff_path_scale is None:
         rff_path_scale = beta
@@ -146,6 +147,7 @@ def experiment(
         gp_sampling_method=gp_sampling_method,
         num_rff_features=num_rff_features,
         rff_path_scale=rff_path_scale,
+        gp_sample_truncation=gp_sample_truncation,
         wandb_notes=wandb_notes  # Add to config for visibility
     )
 
@@ -244,6 +246,7 @@ def experiment(
         'gp_sampling_method': gp_sampling_method,
         'num_rff_features': num_rff_features,
         'rff_path_scale': rff_path_scale,
+        'gp_sample_truncation': gp_sample_truncation,
     }
 
     # Add SBSRL-specific parameters if needed
@@ -382,6 +385,7 @@ def main(args):
         gp_sampling_method=args.gp_sampling_method,
         num_rff_features=args.num_rff_features,
         rff_path_scale=args.rff_path_scale,
+        gp_sample_truncation=args.gp_sample_truncation,
         wandb_notes=args.wandb_notes,
     )
 
@@ -434,6 +438,17 @@ if __name__ == '__main__':
                         help='Number of spectral frequencies per GP output in RFF mode')
     parser.add_argument('--rff_path_scale', type=float, default=None,
                         help='Scale of RFF posterior residuals (defaults to --beta; 1 is a literal posterior draw)')
+    parser.add_argument(
+        '--gp_sample_truncation',
+        type=str,
+        default='none',
+        choices=['none', 'posterior', 'prior'],
+        help=(
+            'Projection applied to GP samples: none, posterior '
+            '(|f-mu| <= beta*sigma_n), or prior '
+            '(|f-mu| <= beta*sqrt(k(z,z)))'
+        ),
+    )
 
     parser.add_argument('--seed', type=int, default=0)
 

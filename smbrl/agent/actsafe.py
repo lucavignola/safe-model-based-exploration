@@ -61,6 +61,7 @@ class SafeModelBasedAgent:
                  gp_sampling_method: str = 'marginal',
                  num_rff_features: int = 512,
                  rff_path_scale: float | None = None,
+                 gp_sample_truncation: str = 'none',
                  ):
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
@@ -106,6 +107,13 @@ class SafeModelBasedAgent:
                 f'rff_path_scale must be non-negative, got {rff_path_scale}.'
             )
         self.rff_path_scale = rff_path_scale
+        if gp_sample_truncation not in ExplorationDynamics.GP_SAMPLE_TRUNCATION_MODES:
+            raise ValueError(
+                "gp_sample_truncation must be one of "
+                f"{sorted(ExplorationDynamics.GP_SAMPLE_TRUNCATION_MODES)}, "
+                f"got {gp_sample_truncation!r}."
+            )
+        self.gp_sample_truncation = gp_sample_truncation
         self.latest_planning_feasible_fraction = 0.0
         self.latest_planning_any_feasible_fraction = 0.0
         self.latest_planning_max_selected_cost = 0.0
@@ -124,6 +132,7 @@ class SafeModelBasedAgent:
             predict_difference=self.predict_difference,
             gp_sampling_method=self.gp_sampling_method,
             rff_path_scale=self.rff_path_scale,
+            gp_sample_truncation=self.gp_sample_truncation,
         )
 
     def sample_episode_posterior_paths(
@@ -355,7 +364,9 @@ class SafeModelBasedAgent:
         )
         self.latest_planning_max_selected_cost = float(jnp.max(planning_costs))
         costs = self.cost_fn_env(collected_states.obs[:-1], actions)
-        return collected_states, actions, intrinsic_rewards, extrinsic_rewards, costs
+        position = collected_states.obs[:-1][:, 0]
+        trajectory_constraint = jnp.abs(position) - 1.5
+        return collected_states, actions, intrinsic_rewards, extrinsic_rewards, costs, jnp.sum(trajectory_constraint)
 
     def from_collected_transitions_to_data(self,
                                            collected_states: PyTree[Array, 'episode_length ...'],
@@ -393,7 +404,7 @@ class SafeModelBasedAgent:
 
         # We collect new data with the current policy
         print(f'Start of data collection')
-        exploration_states, exploration_actions, intrinsic_rewards, extrinsic_rewards, cost = self.simulate_on_true_env(
+        exploration_states, exploration_actions, intrinsic_rewards, extrinsic_rewards, cost, trajectory_constraint = self.simulate_on_true_env(
             model_state=model_state,
             key=key,
             posterior_path_state=posterior_path_state)
@@ -416,6 +427,7 @@ class SafeModelBasedAgent:
                 'intrinsic_rewards': jnp.sum(intrinsic_rewards).item(),
                 'extrinsic_rewards': jnp.sum(extrinsic_rewards).item(),
                 'constraint_cost': cost.item(),
+                'trajectory_constraint': trajectory_constraint.item(),
                 'planning_feasible_fraction': self.latest_planning_feasible_fraction,
                 'planning_any_feasible_fraction': self.latest_planning_any_feasible_fraction,
                 'planning_max_selected_cost': self.latest_planning_max_selected_cost,

@@ -22,6 +22,7 @@ PROJECT_NAME = "CartPoleGP"
 ENTITY_NAME = "lvignola-eth-z-rich"
 PARTICLE_SWEEP = [1, 10, 20, 30, 40, 50]
 SAMPLING_METHODS = ["marginal", "rff"]
+TRUNCATION_MODES = ["none", "posterior", "prior"]
 
 HARDWARE_CONFIGS = {
     "4090_rtx": {"gpu_type": "rtx_4090", "cpus_per_task": 10},
@@ -31,6 +32,7 @@ HARDWARE_CONFIGS = {
 
 def build_sweep_configs(
         sampling_methods=None,
+        truncation_modes=None,
         num_rff_features=512,
         rff_path_scale=None,
         particle_sweep=None,
@@ -42,6 +44,8 @@ def build_sweep_configs(
         sampling_methods = SAMPLING_METHODS
     if particle_sweep is None:
         particle_sweep = PARTICLE_SWEEP
+    if truncation_modes is None:
+        truncation_modes = ["none"]
     if seeds is None:
         seeds = list(range(5))
     beta = 3.0
@@ -53,6 +57,7 @@ def build_sweep_configs(
         "entity_name": [ENTITY_NAME],
         "seed": list(seeds),
         "gp_sampling_method": list(sampling_methods),
+        "gp_sample_truncation": list(truncation_modes),
         "num_rff_features": [num_rff_features],
         "rff_path_scale": [rff_path_scale],
         "num_particles": list(particle_sweep),
@@ -93,6 +98,7 @@ def main(args):
     methods = SAMPLING_METHODS if args.gp_sampling_method == "both" else [args.gp_sampling_method]
     flags_combinations = build_sweep_configs(
         sampling_methods=methods,
+        truncation_modes=args.gp_sample_truncation,
         num_rff_features=args.num_rff_features,
         rff_path_scale=args.rff_path_scale,
         particle_sweep=args.particles,
@@ -129,6 +135,16 @@ if __name__ == "__main__":
     parser.add_argument("--hardware", choices=list(HARDWARE_CONFIGS), default="4090_rtx")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--gp_sampling_method", choices=["marginal", "rff", "both"], default="both")
+    parser.add_argument(
+        "--gp_sample_truncation",
+        choices=TRUNCATION_MODES,
+        nargs="+",
+        default=["none"],
+        help=(
+            "One or more sample-projection modes: none, posterior "
+            "(beta*sigma_n), or prior (beta*sqrt(k(z,z)))"
+        ),
+    )
     parser.add_argument("--num_rff_features", type=int, default=512)
     parser.add_argument(
         "--rff_path_scale",

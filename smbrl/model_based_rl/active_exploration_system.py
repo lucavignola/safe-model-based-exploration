@@ -31,6 +31,8 @@ class DynamicsParams(Generic[ModelState, DummyDynamicsParams]):
 
 
 class ExplorationDynamics(Dynamics, Generic[ModelState]):
+    GP_SAMPLE_TRUNCATION_MODES = {"none", "posterior", "prior"}
+
     def __init__(self,
                  x_dim: int,
                  u_dim: int,
@@ -41,6 +43,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                  predict_difference: bool = True,
                  gp_sampling_method: str = "marginal",
                  rff_path_scale: float | None = None,
+                 gp_sample_truncation: str = "none",
                  ):
         Dynamics.__init__(self, x_dim=x_dim, u_dim=u_dim)
         self.model = model
@@ -59,6 +62,68 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                 f"rff_path_scale must be non-negative, got {rff_path_scale}."
             )
         self.rff_path_scale = rff_path_scale
+        if gp_sample_truncation not in self.GP_SAMPLE_TRUNCATION_MODES:
+            raise ValueError(
+                "gp_sample_truncation must be one of "
+                f"{sorted(self.GP_SAMPLE_TRUNCATION_MODES)}, "
+                f"got {gp_sample_truncation!r}."
+            )
+        self.gp_sample_truncation = gp_sample_truncation
+
+    def _prior_epistemic_std(
+            self,
+            z: chex.Array,
+            model_state: ModelState,
+    ) -> chex.Array:
+        """Returns sqrt(k(z, z)) in the GP prediction's output units."""
+
+        if (
+                not hasattr(self.model, "model")
+                or not hasattr(self.model.model, "m_kernel_multiple_output")
+        ):
+            raise TypeError(
+                "Prior GP truncation requires a GPStatisticalModel-compatible "
+                "model."
+            )
+
+        gp_state = model_state.model_state
+        normalized_z = (
+            z - gp_state.data_stats.inputs.mean
+        ) / gp_state.data_stats.inputs.std
+        normalized_prior_variance = self.model.model.m_kernel_multiple_output(
+            normalized_z[None, :],
+            normalized_z[None, :],
+            gp_state.params,
+        )[:, 0, 0]
+        normalized_prior_std = jnp.sqrt(
+            jnp.maximum(normalized_prior_variance, 0.0)
+        )
+        return normalized_prior_std * gp_state.data_stats.outputs.std
+
+    def _truncate_gp_sample(
+            self,
+            model_prediction: chex.Array,
+            posterior_mean: chex.Array,
+            posterior_epistemic_std: chex.Array,
+            beta: chex.Array,
+            z: chex.Array,
+            model_state: ModelState,
+    ) -> chex.Array:
+        """Projects a GP sample onto the selected beta-confidence tube."""
+
+        if self.gp_sample_truncation == "none":
+            return model_prediction
+        if self.gp_sample_truncation == "posterior":
+            truncation_std = posterior_epistemic_std
+        else:
+            truncation_std = self._prior_epistemic_std(z, model_state)
+
+        truncation_radius = beta * truncation_std
+        return jnp.clip(
+            model_prediction,
+            posterior_mean - truncation_radius,
+            posterior_mean + truncation_radius,
+        )
 
     def init_params(self, key: chex.PRNGKey) -> DynamicsParams:
         param_key, model_state_key = jr.split(key, 2)
@@ -100,8 +165,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         if self.gp_sampling_method == "marginal":
             model_prediction = (
                 pred.mean
-                + beta
-                * epistemic_std
+                + epistemic_std
                 * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
             )
         else:
@@ -128,6 +192,15 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
             model_prediction = pred.mean + path_scale * (
                 posterior_path_value - pred.mean
             )
+
+        model_prediction = self._truncate_gp_sample(
+            model_prediction=model_prediction,
+            posterior_mean=pred.mean,
+            posterior_epistemic_std=epistemic_std,
+            beta=beta,
+            z=z,
+            model_state=dynamics_params.model_state,
+        )
 
         if self.predict_difference:
             x_next = x + model_prediction

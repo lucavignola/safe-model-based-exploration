@@ -39,6 +39,7 @@ _applicable_configs = {
     'num_elites': [100],
     'num_offline_data': [0],
     'violation_eps': [0,0.5],
+    'gp_sample_truncation': ['none'],
     'log_wandb': [1],
 }
 
@@ -156,4 +157,3 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     main(args)
-
