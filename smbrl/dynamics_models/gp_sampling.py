@@ -12,6 +12,8 @@ state-action inputs during an iCEM optimization.
 
 from __future__ import annotations
 
+from typing import Any
+
 import chex
 import jax
 import jax.numpy as jnp
@@ -33,6 +35,11 @@ class RFFPosteriorState:
     cosine_weights: chex.Array
     sine_weights: chex.Array
     correction_weights: chex.Array
+    input_mean: chex.Array
+    input_std: chex.Array
+    output_mean: chex.Array
+    output_std: chex.Array
+    kernel_params: Any
 
     @property
     def num_paths(self) -> int:
@@ -41,6 +48,30 @@ class RFFPosteriorState:
     @property
     def num_features(self) -> int:
         return self.frequencies.shape[1]
+
+
+@chex.dataclass
+class RFFPriorState:
+    """One prior-path bank kept fixed for an entire online run.
+
+    ``path_state`` snapshots every coordinate-dependent quantity used by the
+    RFF construction.  Consequently later GP normalization or parameter
+    updates cannot silently change the sampled functions.
+
+    If ``initial_model_state`` is present, the online prior is the GP
+    posterior after a separate initial/calibration dataset.  Otherwise it is
+    the unconditioned GP prior.  ``confidence_model_states`` contains the
+    successive online posterior snapshots used for recursive truncation.
+    """
+
+    path_state: RFFPosteriorState
+    initial_model_state: Any | None
+    initial_beta: chex.Array
+    confidence_model_states: tuple[Any, ...]
+
+    @property
+    def num_paths(self) -> int:
+        return self.path_state.num_paths
 
 
 def _normalization_arrays(model_state):
@@ -176,6 +207,131 @@ def sample_rff_posterior(
         cosine_weights=cosine_weights,
         sine_weights=sine_weights,
         correction_weights=correction_weights,
+        input_mean=gp_state.data_stats.inputs.mean,
+        input_std=gp_state.data_stats.inputs.std,
+        output_mean=gp_state.data_stats.outputs.mean,
+        output_std=gp_state.data_stats.outputs.std,
+        kernel_params=gp_state.params,
+    )
+
+
+def sample_rff_prior(
+        model,
+        model_state,
+        key: chex.PRNGKey,
+        num_paths: int,
+        num_features: int,
+        initial_beta: chex.Array,
+        condition_on_initial_data: bool = False,
+) -> RFFPriorState:
+    """Draws a fixed RFF bank from the online GP prior.
+
+    With ``condition_on_initial_data=False`` this ignores the BSM model's
+    synthetic initialization history and samples the unconditioned
+    finite-RFF approximation to the GP prior.  With ``True``, the
+    already-updated GP posterior is treated as the prior for the subsequent
+    online experiment; this is useful when an independent offline/calibration
+    dataset defines the online prior.
+    """
+
+    if num_paths < 1:
+        raise ValueError(f"num_paths must be positive, got {num_paths}.")
+    if num_features < 1:
+        raise ValueError(f"num_features must be positive, got {num_features}.")
+
+    if condition_on_initial_data:
+        path_state = sample_rff_posterior(
+            model=model,
+            model_state=model_state,
+            key=key,
+            num_paths=num_paths,
+            num_features=num_features,
+        )
+        initial_model_state = model_state
+    else:
+        _validate_rff_compatible_model(model, model_state)
+        gp_state = model_state.model_state
+        input_dim = gp_state.data_stats.inputs.mean.shape[0]
+        output_dim = gp_state.data_stats.outputs.mean.shape[0]
+
+        pseudo_length_scales = gp_state.params["pseudo_length_scale"]
+        length_scales = softplus(pseudo_length_scales)
+        if length_scales.shape != (output_dim, input_dim):
+            raise ValueError(
+                "Expected output-specific ARD length scales with shape "
+                f"{(output_dim, input_dim)}, got {length_scales.shape}."
+            )
+
+        base_frequencies = jr.normal(
+            jr.fold_in(key, 0),
+            shape=(output_dim, num_features, input_dim),
+        )
+        frequencies = base_frequencies / length_scales[:, None, :]
+
+        path_ids = jnp.arange(num_paths, dtype=jnp.uint32)
+        path_root = jr.fold_in(key, 1)
+        path_keys = jax.vmap(
+            lambda path_id: jr.fold_in(path_root, path_id)
+        )(path_ids)
+
+        def sample_one_path(path_key):
+            cosine_key, sine_key = jr.split(path_key)
+            return (
+                jr.normal(cosine_key, shape=(output_dim, num_features)),
+                jr.normal(sine_key, shape=(output_dim, num_features)),
+            )
+
+        cosine_weights, sine_weights = jax.vmap(sample_one_path)(path_keys)
+        cosine_weights = jnp.swapaxes(cosine_weights, 0, 1)
+        sine_weights = jnp.swapaxes(sine_weights, 0, 1)
+        path_state = RFFPosteriorState(
+            normalized_history_inputs=jnp.zeros(
+                (0, input_dim), dtype=gp_state.data_stats.inputs.mean.dtype
+            ),
+            frequencies=frequencies,
+            cosine_weights=cosine_weights,
+            sine_weights=sine_weights,
+            correction_weights=jnp.zeros(
+                (output_dim, num_paths, 0),
+                dtype=cosine_weights.dtype,
+            ),
+            input_mean=gp_state.data_stats.inputs.mean,
+            input_std=gp_state.data_stats.inputs.std,
+            output_mean=gp_state.data_stats.outputs.mean,
+            output_std=gp_state.data_stats.outputs.std,
+            kernel_params=gp_state.params,
+        )
+        initial_model_state = None
+
+    initial_beta = jnp.asarray(initial_beta)
+    output_dim = path_state.output_mean.shape[0]
+    if initial_beta.shape == ():
+        initial_beta = jnp.full((output_dim,), initial_beta)
+    if initial_beta.shape != (output_dim,):
+        raise ValueError(
+            "initial_beta must be scalar or have shape "
+            f"({output_dim},), got {initial_beta.shape}."
+        )
+
+    return RFFPriorState(
+        path_state=path_state,
+        initial_model_state=initial_model_state,
+        initial_beta=initial_beta,
+        confidence_model_states=(),
+    )
+
+
+def append_rff_prior_confidence(
+        prior_state: RFFPriorState,
+        model_state,
+) -> RFFPriorState:
+    """Adds one immutable posterior confidence snapshot."""
+
+    return prior_state.replace(
+        confidence_model_states=(
+            *prior_state.confidence_model_states,
+            model_state,
+        )
     )
 
 
@@ -188,10 +344,9 @@ def evaluate_rff_posterior(
 ) -> chex.Array:
     """Evaluates one fixed posterior path at an unnormalized input."""
 
-    gp_state = model_state.model_state
-    input_stats = gp_state.data_stats.inputs
-    output_stats = gp_state.data_stats.outputs
-    normalized_input = (input_value - input_stats.mean) / input_stats.std
+    normalized_input = (
+        input_value - posterior_state.input_mean
+    ) / posterior_state.input_std
 
     cosine_weights = posterior_state.cosine_weights[:, path_index, :]
     sine_weights = posterior_state.sine_weights[:, path_index, :]
@@ -212,11 +367,33 @@ def evaluate_rff_posterior(
     kernel_to_data = model.model.v_kernel_multiple_output(
         posterior_state.normalized_history_inputs,
         normalized_input,
-        gp_state.params,
+        posterior_state.kernel_params,
     )
     correction = jnp.sum(
         kernel_to_data * posterior_state.correction_weights[:, path_index, :],
         axis=-1,
     )
     normalized_value = prior_value + correction
-    return normalized_value * output_stats.std + output_stats.mean
+    return (
+        normalized_value * posterior_state.output_std
+        + posterior_state.output_mean
+    )
+
+
+def evaluate_rff_prior(
+        model,
+        prior_state: RFFPriorState,
+        input_value: chex.Array,
+        path_index: chex.Array,
+) -> chex.Array:
+    """Evaluates one whole-run fixed prior realization."""
+
+    # ``evaluate_rff_posterior`` intentionally reads all coordinate and kernel
+    # quantities from the path snapshot; model_state is therefore unused.
+    return evaluate_rff_posterior(
+        model=model,
+        model_state=prior_state.initial_model_state,
+        posterior_state=prior_state.path_state,
+        input_value=input_value,
+        path_index=path_index,
+    )

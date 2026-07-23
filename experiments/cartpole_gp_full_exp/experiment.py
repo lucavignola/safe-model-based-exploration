@@ -18,8 +18,13 @@ def experiment(
         num_steps: int = 5,
         exponent: int = 2,
         lambda_constraint: float = 1e6,
+        constraint_mode: str = 'penalty',
+        constraint_tolerance: float = 1e-6,
+        constraint_failure_mode: str = 'recovery',
+        reward_dynamics_source: str = 'particles',
         icem_horizon: int = 20,
         episode_length: int = 50,
+        num_episodes: int = 10,
         action_repeat: int = 2,
         max_position: float = 0.5,
         action_cost: float = 0.0,
@@ -50,9 +55,15 @@ def experiment(
         num_rff_features: int = 512,
         rff_path_scale: float | None = None,
         gp_sample_truncation: str = 'none',
+        aleatoric_noise_in_prediction: bool = True,
+        gp_path_source: str = 'posterior',
+        gp_beta_mode: str = 'fixed',
+        confidence_delta: float = 0.05,
+        information_gain_bound: str = 'diagonal',
+        rkhs_norm_safety_factor: float = 1.0,
 ):
     if rff_path_scale is None:
-        rff_path_scale = beta
+        rff_path_scale = 1.0 if gp_path_source == 'prior' else beta
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
@@ -73,6 +84,7 @@ def experiment(
     from smbrl.playground.cartpole_icem import PositionBound
     from bsm.statistical_model import GPStatisticalModel
     from smbrl.dynamics_models.gps import ARD
+    from smbrl.dynamics_models.gp_confidence import TheoremGPStatisticalModel
     from jaxtyping import Float, Array, Scalar
     from bsm.utils import Data, Stats, DataStats
     from smbrl.agent.actsafe import Task
@@ -86,8 +98,13 @@ def experiment(
         num_steps=num_steps,
         exponent=exponent,
         lambda_constraint=lambda_constraint,
+        constraint_mode=constraint_mode,
+        constraint_tolerance=constraint_tolerance,
+        constraint_failure_mode=constraint_failure_mode,
+        reward_dynamics_source=reward_dynamics_source,
         icem_horizon=icem_horizon,
         episode_length=episode_length,
+        num_episodes=num_episodes,
         action_repeat=action_repeat,
         max_position=max_position,
         action_cost=action_cost,
@@ -114,6 +131,12 @@ def experiment(
         num_rff_features=num_rff_features,
         rff_path_scale=rff_path_scale,
         gp_sample_truncation=gp_sample_truncation,
+        aleatoric_noise_in_prediction=aleatoric_noise_in_prediction,
+        gp_path_source=gp_path_source,
+        gp_beta_mode=gp_beta_mode,
+        confidence_delta=confidence_delta,
+        information_gain_bound=information_gain_bound,
+        rkhs_norm_safety_factor=rkhs_norm_safety_factor,
         wandb_notes=wandb_notes  # Add to config for visibility
     )
     import jax
@@ -191,7 +214,53 @@ def experiment(
     else:
         num_training_steps = constant_schedule(num_training_steps)
 
-    if use_function_norms:
+    if gp_beta_mode == 'theorem':
+        if not use_precomputed_kernel_params:
+            raise ValueError(
+                "Cartpole theorem beta mode requires "
+                "--use_precomputed_kernel_params=1 so the kernel and "
+                "normalization defining B remain fixed."
+            )
+        if use_function_norms:
+            # These values are finite-design simulator estimates, not
+            # certified continuous-domain RKHS upper bounds.  The theorem
+            # assumes one common B, so use the largest output-wise estimate
+            # for every output rather than a less conservative vector bound.
+            rkhs_norm_bound = (
+                jnp.ones(env.observation_size)
+                * jnp.max(precomputed_function_norms)
+                * rkhs_norm_safety_factor
+            )
+            configs['rkhs_norm_bound_source'] = (
+                'max_empirical_finite_design_simulator'
+            )
+        else:
+            # An explicit prior assumption supplied by the experimenter.
+            rkhs_norm_bound = (
+                jnp.ones(env.observation_size)
+                * function_norm
+                * rkhs_norm_safety_factor
+            )
+            configs['rkhs_norm_bound_source'] = 'explicit_assumption'
+        configs['rkhs_norm_bound'] = np.asarray(rkhs_norm_bound).tolist()
+        model = TheoremGPStatisticalModel(
+            kernel=ARD(input_dim=env.observation_size + env.action_size),
+            input_dim=env.observation_size + env.action_size,
+            output_dim=env.observation_size,
+            output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
+            logging_wandb=log_wandb,
+            f_norm_bound=rkhs_norm_bound,
+            delta=confidence_delta,
+            information_gain_bound=information_gain_bound,
+            fixed_kernel_params=True,
+            normalization_stats=precomputed_normalization_stats,
+            num_training_steps=num_training_steps,
+        )
+    elif gp_beta_mode == 'bsm' or use_function_norms:
+        if use_function_norms:
+            rkhs_norm_bound = precomputed_function_norms * beta
+        else:
+            rkhs_norm_bound = jnp.ones(env.observation_size) * function_norm
         model = GPStatisticalModel(
             kernel=ARD(input_dim=env.observation_size + env.action_size),
             input_dim=env.observation_size + env.action_size,
@@ -199,7 +268,8 @@ def experiment(
             output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
             logging_wandb=log_wandb,
             beta=None,
-            f_norm_bound=precomputed_function_norms * beta,
+            f_norm_bound=rkhs_norm_bound,
+            delta=confidence_delta,
             fixed_kernel_params=use_precomputed_kernel_params,
             normalization_stats=precomputed_normalization_stats,
             num_training_steps=num_training_steps,
@@ -289,6 +359,9 @@ def experiment(
         num_steps=num_steps,
         exponent=exponent,
         lambda_constraint=lambda_constraint,
+        constraint_mode=constraint_mode,
+        constraint_tolerance=constraint_tolerance,
+        reward_dynamics_source=reward_dynamics_source,
     )
 
     cost_fn = PositionBound(horizon=icem_horizon,
@@ -317,6 +390,9 @@ def experiment(
         'num_rff_features': num_rff_features,
         'rff_path_scale': rff_path_scale,
         'gp_sample_truncation': gp_sample_truncation,
+        'aleatoric_noise_in_prediction': aleatoric_noise_in_prediction,
+        'gp_path_source': gp_path_source,
+        'constraint_failure_mode': constraint_failure_mode,
     }
 
     # Add SBSRL-specific parameters if needed
@@ -347,8 +423,11 @@ def experiment(
         model_state.model_state.data_stats = precomputed_normalization_stats
 
     # Here we need to take care of the first datapoint!!
-    model_state.model_state.history = Data(inputs=jnp.array([[0., 1.0, 0., 0., 0., 0.]]),
-                                           outputs=jnp.array([[0., 0., 0., 0., 0.]]))
+    if gp_beta_mode != 'theorem':
+        model_state.model_state.history = Data(
+            inputs=jnp.array([[0., 1.0, 0., 0., 0., 0.]]),
+            outputs=jnp.array([[0., 0., 0., 0., 0.]]),
+        )
 
     if log_wandb:
         import wandb
@@ -376,7 +455,7 @@ def experiment(
             wandb_kwargs['dir'] = logs_dir
 
         wandb.init(**wandb_kwargs)
-    agent.run_episodes(num_episodes=10,
+    agent.run_episodes(num_episodes=num_episodes,
                        key=key,
                        model_state=model_state,
                        folder_name=f'{logs_dir}/{alg_name}/{exp_hash}/',
@@ -417,8 +496,13 @@ def main(args):
         num_steps=args.num_steps,
         exponent=args.exponent,
         lambda_constraint=args.lambda_constraint,
+        constraint_mode=args.constraint_mode,
+        constraint_tolerance=args.constraint_tolerance,
+        constraint_failure_mode=args.constraint_failure_mode,
+        reward_dynamics_source=args.reward_dynamics_source,
         icem_horizon=args.icem_horizon,
         episode_length=args.episode_length,
+        num_episodes=args.num_episodes,
         max_position=args.max_position,
         action_cost=args.action_cost,
         num_training_steps=args.num_training_steps,
@@ -450,6 +534,14 @@ def main(args):
         num_rff_features=args.num_rff_features,
         rff_path_scale=args.rff_path_scale,
         gp_sample_truncation=args.gp_sample_truncation,
+        aleatoric_noise_in_prediction=bool(
+            args.aleatoric_noise_in_prediction
+        ),
+        gp_path_source=args.gp_path_source,
+        gp_beta_mode=args.gp_beta_mode,
+        confidence_delta=args.confidence_delta,
+        information_gain_bound=args.information_gain_bound,
+        rkhs_norm_safety_factor=args.rkhs_norm_safety_factor,
     )
 
 
@@ -467,8 +559,39 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', type=int, default=5)
     parser.add_argument('--exponent', type=float, default=1.0)
     parser.add_argument('--lambda_constraint', type=float, default=1e8)
+    parser.add_argument(
+        '--constraint_mode',
+        choices=['penalty', 'hard'],
+        default='penalty',
+        help='Penalty ranking or feasibility-first hard constraint ranking.',
+    )
+    parser.add_argument(
+        '--constraint_tolerance',
+        type=float,
+        default=1e-6,
+        help='Numerical feasibility tolerance used in hard mode.',
+    )
+    parser.add_argument(
+        '--constraint_failure_mode',
+        choices=['recovery', 'raise'],
+        default='recovery',
+        help=(
+            'Raise before executing an infeasible recovery sequence, or keep '
+            'the legacy always-return-an-action behavior.'
+        ),
+    )
+    parser.add_argument(
+        '--reward_dynamics_source',
+        choices=['particles', 'posterior_mean'],
+        default='particles',
+        help=(
+            'Evaluate reward over sampled particles (legacy) or in one '
+            'deterministic posterior-mean dynamics rollout.'
+        ),
+    )
     parser.add_argument('--icem_horizon', type=int, default=50)
     parser.add_argument('--episode_length', type=int, default=50)
+    parser.add_argument('--num_episodes', type=int, default=10)
     parser.add_argument('--action_repeat', type=int, default=2)
     parser.add_argument('--max_position', type=float, default=1.5)
     parser.add_argument('--action_cost', type=float, default=0.0)
@@ -502,16 +625,62 @@ if __name__ == '__main__':
     parser.add_argument('--num_rff_features', type=int, default=512,
                         help='Number of spectral frequencies per GP output in RFF mode')
     parser.add_argument('--rff_path_scale', type=float, default=None,
-                        help='Scale of RFF posterior residuals (defaults to --beta; 1 is a literal posterior draw)')
+                        help='Scale of RFF posterior residuals (defaults to --beta; 1 is an uninflated approximate posterior path)')
     parser.add_argument(
         '--gp_sample_truncation',
         type=str,
         default='none',
-        choices=['none', 'posterior', 'prior'],
+        choices=['none', 'posterior', 'prior', 'recursive'],
         help=(
             'Projection applied to GP samples: none, posterior '
             '(|f-mu| <= beta*sigma_n), or prior '
             '(|f-mu| <= beta*sqrt(k(z,z)))'
+        ),
+    )
+    parser.add_argument(
+        '--aleatoric_noise_in_prediction',
+        type=int,
+        choices=[0, 1],
+        default=1,
+        help=(
+            'Whether planning rollouts sample the GP likelihood scale as '
+            'stepwise process noise.'
+        ),
+    )
+    parser.add_argument(
+        '--gp_path_source',
+        type=str,
+        default='posterior',
+        choices=['posterior', 'prior'],
+        help='Resample posterior RFF paths each episode or retain prior paths.',
+    )
+    parser.add_argument(
+        '--gp_beta_mode',
+        type=str,
+        default='fixed',
+        choices=['fixed', 'bsm', 'theorem'],
+        help=(
+            'fixed uses --beta; bsm uses the library beta=None rule; theorem '
+            'uses the SBSRL coefficient with a fixed GP.'
+        ),
+    )
+    parser.add_argument('--confidence_delta', type=float, default=0.05)
+    parser.add_argument(
+        '--information_gain_bound',
+        choices=['diagonal', 'observed'],
+        default='diagonal',
+        help=(
+            'diagonal is the conservative maximum-information-gain bound; '
+            'observed is a non-certified diagnostic ablation.'
+        ),
+    )
+    parser.add_argument(
+        '--rkhs_norm_safety_factor',
+        type=float,
+        default=1.0,
+        help=(
+            'Multiplier on the explicit/finite-design B value; finite-design '
+            'estimates remain non-certified for every finite multiplier.'
         ),
     )
 

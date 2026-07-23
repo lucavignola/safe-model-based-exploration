@@ -23,7 +23,10 @@ from optax import Schedule, constant_schedule
 
 from smbrl.model_based_rl.active_exploration_system import ExplorationSystem, ExplorationReward, ExplorationDynamics
 from smbrl.dynamics_models.gp_sampling import (
+    RFFPriorState,
     RFFPosteriorState,
+    append_rff_prior_confidence,
+    sample_rff_prior,
     sample_rff_posterior,
 )
 from smbrl.optimizer.icem import iCemParams, iCemTO, AbstractCost
@@ -59,9 +62,12 @@ class SafeModelBasedAgent:
                  use_pessimism: bool = True,
                  optimizer: str = 'icem',  # can be 'icem' or 'ipopt'
                  gp_sampling_method: str = 'marginal',
+                 gp_path_source: str = 'posterior',
                  num_rff_features: int = 512,
                  rff_path_scale: float | None = None,
                  gp_sample_truncation: str = 'none',
+                 aleatoric_noise_in_prediction: bool = True,
+                 constraint_failure_mode: str = 'recovery',
                  ):
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
@@ -101,11 +107,33 @@ class SafeModelBasedAgent:
                 f'num_rff_features must be positive, got {num_rff_features}.'
             )
         self.gp_sampling_method = gp_sampling_method
+        if gp_path_source not in ExplorationDynamics.GP_PATH_SOURCES:
+            raise ValueError(
+                "gp_path_source must be one of "
+                f"{sorted(ExplorationDynamics.GP_PATH_SOURCES)}, "
+                f"got {gp_path_source!r}."
+            )
+        if gp_path_source == 'prior' and gp_sampling_method != 'rff':
+            raise ValueError(
+                "Whole-run prior paths require gp_sampling_method='rff'."
+            )
+        self.gp_path_source = gp_path_source
         self.num_rff_features = num_rff_features
         if rff_path_scale is not None and rff_path_scale < 0:
             raise ValueError(
                 f'rff_path_scale must be non-negative, got {rff_path_scale}.'
             )
+        if (
+                gp_path_source == 'prior'
+                and rff_path_scale is not None
+                and rff_path_scale != 1.0
+        ):
+            raise ValueError(
+                "Whole-run prior RFF paths are uninflated prior draws and require "
+                "rff_path_scale=1."
+            )
+        if gp_path_source == 'prior' and rff_path_scale is None:
+            rff_path_scale = 1.0
         self.rff_path_scale = rff_path_scale
         if gp_sample_truncation not in ExplorationDynamics.GP_SAMPLE_TRUNCATION_MODES:
             raise ValueError(
@@ -114,8 +142,26 @@ class SafeModelBasedAgent:
                 f"got {gp_sample_truncation!r}."
             )
         self.gp_sample_truncation = gp_sample_truncation
+        self.aleatoric_noise_in_prediction = aleatoric_noise_in_prediction
+        if (
+                gp_sample_truncation == 'recursive'
+                and gp_path_source != 'prior'
+        ):
+            raise ValueError(
+                "Recursive confidence truncation requires "
+                "gp_path_source='prior'."
+            )
+        self._fixed_prior_path_state: RFFPriorState | None = None
+        if constraint_failure_mode not in {'recovery', 'raise'}:
+            raise ValueError(
+                "constraint_failure_mode must be one of "
+                "{'recovery', 'raise'}, "
+                f"got {constraint_failure_mode!r}."
+            )
+        self.constraint_failure_mode = constraint_failure_mode
         self.latest_planning_feasible_fraction = 0.0
         self.latest_planning_any_feasible_fraction = 0.0
+        self.latest_planning_solver_failure_fraction = 0.0
         self.latest_planning_max_selected_cost = 0.0
 
     def get_planning_dynamics(self,
@@ -131,19 +177,34 @@ class SafeModelBasedAgent:
             scale_with_aleatoric_std=scale_with_aleatoric_std,
             predict_difference=self.predict_difference,
             gp_sampling_method=self.gp_sampling_method,
+            gp_path_source=self.gp_path_source,
             rff_path_scale=self.rff_path_scale,
             gp_sample_truncation=self.gp_sample_truncation,
+            aleatoric_noise_in_prediction=(
+                self.aleatoric_noise_in_prediction
+            ),
         )
 
     def sample_episode_posterior_paths(
             self,
             model_state: ModelState,
             episode_key: Key[Array, '2'],
-    ) -> RFFPosteriorState | None:
-        """Samples one RFF bank after the episode's GP posterior update."""
+    ) -> RFFPosteriorState | RFFPriorState | None:
+        """Returns the path bank used throughout one episode.
+
+        Posterior paths are redrawn after each GP update.  Prior paths are
+        created once by ``_initialize_fixed_prior_paths`` and reused for the
+        entire online run.
+        """
 
         if self.gp_sampling_method == 'marginal':
             return None
+        if self.gp_path_source == 'prior':
+            if self._fixed_prior_path_state is None:
+                raise RuntimeError(
+                    "Fixed prior paths must be initialized before planning."
+                )
+            return self._fixed_prior_path_state
         # A fixed tag keeps path sampling separate from control/environment RNGs
         # and makes changing the sampling method or M leave those streams intact.
         path_key = jr.fold_in(episode_key, 0x524646)
@@ -155,6 +216,88 @@ class SafeModelBasedAgent:
             num_features=self.num_rff_features,
         )
 
+    def _initial_prior_beta(self) -> chex.Array:
+        """Returns the output-wise ``B`` used for the episode-zero tube."""
+
+        if hasattr(self.model, "theorem_f_norm_bound"):
+            return jnp.asarray(self.model.theorem_f_norm_bound)
+        if hasattr(self.model, "f_norm_bound"):
+            return jnp.asarray(self.model.f_norm_bound)
+        raise TypeError(
+            "Recursive prior truncation requires a GP model exposing "
+            "an RKHS/function norm bound as f_norm_bound."
+        )
+
+    def _empty_gp_history(self, model_state: ModelState) -> ModelState:
+        """Removes BSM's synthetic zero datum for a true no-data prior."""
+
+        gp_state = model_state.model_state
+        empty_history = Data(
+            inputs=jnp.zeros(
+                (0, self.model.input_dim),
+                dtype=gp_state.history.inputs.dtype,
+            ),
+            outputs=jnp.zeros(
+                (0, self.model.output_dim),
+                dtype=gp_state.history.outputs.dtype,
+            ),
+        )
+        replacements = {"history": empty_history}
+        if hasattr(gp_state, "alphas"):
+            replacements["alphas"] = jnp.zeros(
+                (self.model.output_dim, 0),
+                dtype=gp_state.history.outputs.dtype,
+            )
+        return model_state.replace(
+            model_state=gp_state.replace(**replacements)
+        )
+
+    def _initialize_fixed_prior_paths(
+            self,
+            model_state: ModelState,
+            episode_key: Key[Array, '2'],
+            *,
+            condition_on_initial_data: bool,
+    ) -> ModelState:
+        """Samples and freezes the online prior before the first rollout."""
+
+        if not isinstance(self.model, GPStatisticalModel):
+            raise TypeError(
+                "Whole-run RFF prior paths require GPStatisticalModel."
+            )
+        if not condition_on_initial_data:
+            model_state = self._empty_gp_history(model_state)
+
+        path_key = jr.fold_in(episode_key, 0x5052494F)
+        self._fixed_prior_path_state = sample_rff_prior(
+            model=self.model,
+            model_state=model_state,
+            key=path_key,
+            num_paths=self.icem_params.num_particles,
+            num_features=self.num_rff_features,
+            initial_beta=self._initial_prior_beta(),
+            condition_on_initial_data=condition_on_initial_data,
+        )
+
+        # A fixed function-space prior requires a fixed kernel and coordinate
+        # system.  Future updates only condition this same GP on more data.
+        self.model.fixed_kernel_params = True
+        self.model.normalization_stats = model_state.model_state.data_stats
+        return model_state
+
+    def _append_fixed_prior_confidence(
+            self,
+            model_state: ModelState,
+    ) -> None:
+        """Adds the latest post-online-data confidence tube exactly once."""
+
+        if self._fixed_prior_path_state is None:
+            raise RuntimeError("Fixed prior paths have not been initialized.")
+        self._fixed_prior_path_state = append_rff_prior_confidence(
+            self._fixed_prior_path_state,
+            model_state,
+        )
+
     def train_dynamics_model(self,
                              model_state: ModelState,
                              data: Data,
@@ -163,11 +306,33 @@ class SafeModelBasedAgent:
                                         stats_model_state=model_state)
         return model_state
 
+    def _handle_constraint_solver_failure(
+            self,
+            optimizer_state,
+            *,
+            step: int,
+            context: str,
+    ) -> None:
+        """Prevents an infeasible recovery sequence from masquerading as safe."""
+
+        failed = bool(
+            jax.device_get(optimizer_state.constraint_solver_failed)
+        )
+        if not failed or self.constraint_failure_mode == 'recovery':
+            return
+        raise RuntimeError(
+            "Hard-constrained iCEM found no feasible candidate at "
+            f"{context} step {step}. The optimizer's recovery sequence is "
+            "infeasible and was not executed. Increase the planning budget "
+            "or provide a separately verified safe fallback controller."
+        )
+
     def test_a_task(self,
                     model_state: ModelState,
                     key: Key[Array, '2'],
                     task: Task,
-                    posterior_path_state: RFFPosteriorState | None = None,
+                    posterior_path_state:
+                    RFFPosteriorState | RFFPriorState | None = None,
                     ) -> Tuple[State, Float[Array, '... action_dim'], Float[Array, 'episode_length 1'], Metrics]:
         if posterior_path_state is None:
             posterior_path_state = self.sample_episode_posterior_paths(
@@ -221,6 +386,11 @@ class SafeModelBasedAgent:
 
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
+            self._handle_constraint_solver_failure(
+                optimizer_state,
+                step=i,
+                context=f"evaluation task {task.name!r}",
+            )
             for _ in range(self.action_repeat):
                 env_state = self.env.step(env_state, action)
             collected_states.append(env_state)
@@ -268,7 +438,8 @@ class SafeModelBasedAgent:
     def simulate_on_true_env(self,
                              model_state: ModelState,
                              key: Key[Array, '2'],
-                             posterior_path_state: RFFPosteriorState | None = None,
+                             posterior_path_state:
+                             RFFPosteriorState | RFFPriorState | None = None,
                              ) -> Tuple[
         PyTree[Array, 'episode_length ...'], Float[Array, 'episode_length action_dim'], Float[
             Array, 'episode_length 1'], Float[
@@ -329,13 +500,22 @@ class SafeModelBasedAgent:
         planning_costs = []
         planning_feasible = []
         planning_any_feasible = []
+        planning_solver_failed = []
         # TODO: Should implement treatment of done flags
         for i in range(self.episode_length):
             action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
+            self._handle_constraint_solver_failure(
+                optimizer_state,
+                step=i,
+                context="training rollout",
+            )
             print(f'Step {i}: reward is {optimizer_state.best_reward}')
             planning_costs.append(optimizer_state.best_cost)
             planning_feasible.append(optimizer_state.best_feasible)
             planning_any_feasible.append(optimizer_state.any_feasible)
+            planning_solver_failed.append(
+                optimizer_state.constraint_solver_failed
+            )
             for _ in range(self.action_repeat):
                 env_state = self.env.step(env_state, action)
                 extrinsic_rewards.append(env_state.reward)
@@ -356,11 +536,15 @@ class SafeModelBasedAgent:
         planning_costs = jnp.stack(planning_costs)
         planning_feasible = jnp.stack(planning_feasible)
         planning_any_feasible = jnp.stack(planning_any_feasible)
+        planning_solver_failed = jnp.stack(planning_solver_failed)
         self.latest_planning_feasible_fraction = float(
             jnp.mean(planning_feasible.astype(jnp.float32))
         )
         self.latest_planning_any_feasible_fraction = float(
             jnp.mean(planning_any_feasible.astype(jnp.float32))
+        )
+        self.latest_planning_solver_failure_fraction = float(
+            jnp.mean(planning_solver_failed.astype(jnp.float32))
         )
         self.latest_planning_max_selected_cost = float(jnp.max(planning_costs))
         costs = self.cost_fn_env(collected_states.obs[:-1], actions)
@@ -390,12 +574,31 @@ class SafeModelBasedAgent:
                    train_model: bool = True,
                    folder_name: str = 'experiment_2024'
                    ) -> (ModelState, Data):
+        if (
+                self.gp_path_source == 'prior'
+                and self._fixed_prior_path_state is None
+        ):
+            # Theory-aligned lifecycle: draw the fixed finite-RFF prior paths
+            # before any D0 update. If offline data are supplied, their
+            # posterior confidence tube is appended below before episode-0
+            # planning.
+            model_state = self._initialize_fixed_prior_paths(
+                model_state=model_state,
+                episode_key=key,
+                condition_on_initial_data=False,
+            )
+
         if train_model:
             # If we collected some data already then we train dynamics model and the policy
             print(f'Start of dynamics training')
             model_state = self.train_dynamics_model(model_state=model_state,
                                                     data=data,
                                                     episode_idx=episode_idx)
+
+        if self.gp_path_source == 'prior' and train_model:
+            # Every real-data update, including an optional offline D0 update,
+            # contributes the next beta_n sigma_n tube.
+            self._append_fixed_prior_confidence(model_state)
 
         posterior_path_state = self.sample_episode_posterior_paths(
             model_state=model_state,
@@ -430,8 +633,17 @@ class SafeModelBasedAgent:
                 'trajectory_constraint': trajectory_constraint.item(),
                 'planning_feasible_fraction': self.latest_planning_feasible_fraction,
                 'planning_any_feasible_fraction': self.latest_planning_any_feasible_fraction,
+                'planning_solver_failure_fraction':
+                    self.latest_planning_solver_failure_fraction,
                 'planning_max_selected_cost': self.latest_planning_max_selected_cost,
             }
+            beta_values = jnp.atleast_1d(model_state.beta)
+            for output_idx, beta_value in enumerate(beta_values):
+                metrics[f'gp/beta_{output_idx}'] = float(beta_value)
+            if self._fixed_prior_path_state is not None:
+                metrics['gp/recursive_confidence_tubes'] = len(
+                    self._fixed_prior_path_state.confidence_model_states
+                )
             if hasattr(self, 'action_cost'):
                 action_tolerance = ToleranceReward(bounds=(-0.1, 0.1), margin=0.1, sigmoid='gaussian')
                 action_penalty = getattr(self, 'action_cost') * jnp.sum(1 - action_tolerance(exploration_actions))

@@ -155,6 +155,14 @@ class iCemParams(NamedTuple):
     u_min: float | chex.Array = minimal value for action
     u_max: float | chex.Array = maximal value for action
     warm_start: bool = If we shift the action sequence for one and repeat the last action at initialization
+    constraint_mode: "penalty" for the legacy soft penalty or "hard" for
+        feasibility-first candidate ranking
+    constraint_tolerance: Numerical tolerance in the hard feasibility test
+        cost <= constraint_tolerance
+    reward_dynamics_source: "particles" preserves the legacy reward aggregate
+        over sampled particle rollouts. "posterior_mean" evaluates reward in a
+        separate deterministic posterior-mean rollout while safety costs remain
+        evaluated over all sampled particle dynamics.
 
     """
     num_particles: int = 10
@@ -169,6 +177,9 @@ class iCemParams(NamedTuple):
     u_max: float | chex.Array = 1.0
     warm_start: bool = True
     lambda_constraint: float = 1e4
+    constraint_mode: str = "penalty"
+    constraint_tolerance: float = 1e-6
+    reward_dynamics_source: str = "particles"
 
 
 class ICemCarry(NamedTuple):
@@ -195,6 +206,7 @@ class iCemOptimizerState(OptimizerState[DynamicsParams, RewardParams]):
     best_cost: chex.Array = None
     best_feasible: chex.Array = None
     any_feasible: chex.Array = None
+    constraint_solver_failed: chex.Array = None
     key: chex.Array = None
 
     @property
@@ -241,6 +253,52 @@ def _particle_system_params(system_params, candidate_key, particle_index):
     )
 
 
+def _hard_constraint_ranking(
+        rewards: chex.Array,
+        costs: chex.Array,
+        constraint_tolerance: float,
+) -> chex.Array:
+    """Ranks candidates from worst to best for feasibility-first CEM.
+
+    Feasible candidates always rank above infeasible candidates. Within the
+    feasible group, larger reward is better. Within the infeasible group,
+    smaller constraint cost (and therefore smaller violation) is better, with
+    reward used only to break equal-cost ties. Non-finite candidates are
+    treated as infeasible and worst-ranked.
+    """
+
+    finite = jnp.logical_and(jnp.isfinite(rewards), jnp.isfinite(costs))
+    safe_rewards = jnp.where(jnp.isfinite(rewards), rewards, -jnp.inf)
+    safe_costs = jnp.where(jnp.isfinite(costs), costs, jnp.inf)
+    feasible = jnp.logical_and(
+        finite,
+        safe_costs <= constraint_tolerance,
+    )
+    feasibility_rank = feasible.astype(jnp.int32)
+    within_group_rank = jnp.where(feasible, safe_rewards, -safe_costs)
+    # jnp.lexsort uses the last key as the primary key.
+    return jnp.lexsort(
+        (safe_rewards, within_group_rank, feasibility_rank),
+        axis=0,
+    )
+
+
+def _hard_constraint_elite_indices(
+        rewards: chex.Array,
+        costs: chex.Array,
+        num_elites: int,
+        constraint_tolerance: float,
+) -> chex.Array:
+    """Returns feasibility-first elites, ordered from worst to best."""
+
+    ranking = _hard_constraint_ranking(
+        rewards=rewards,
+        costs=costs,
+        constraint_tolerance=constraint_tolerance,
+    )
+    return ranking[-num_elites:]
+
+
 class iCemTO(BaseOptimizer):
     def __init__(self,
                  horizon: int,
@@ -262,6 +320,25 @@ class iCemTO(BaseOptimizer):
         self.action_dim = action_dim
         self.horizon = horizon
         self.cost_fn = cost_fn
+        if self.opt_params.constraint_mode not in {"penalty", "hard"}:
+            raise ValueError(
+                "constraint_mode must be one of {'penalty', 'hard'}, "
+                f"got {self.opt_params.constraint_mode!r}."
+            )
+        if self.opt_params.constraint_tolerance < 0:
+            raise ValueError(
+                "constraint_tolerance must be non-negative, "
+                f"got {self.opt_params.constraint_tolerance}."
+            )
+        if self.opt_params.reward_dynamics_source not in {
+                "particles",
+                "posterior_mean",
+        }:
+            raise ValueError(
+                "reward_dynamics_source must be one of "
+                "{'particles', 'posterior_mean'}, "
+                f"got {self.opt_params.reward_dynamics_source!r}."
+            )
         if use_optimism:
             self.summarize_raw_samples = jnp.max
         else:
@@ -284,6 +361,7 @@ class iCemTO(BaseOptimizer):
             best_cost=jnp.asarray(jnp.inf),
             best_feasible=jnp.asarray(False),
             any_feasible=jnp.asarray(False),
+            constraint_solver_failed=jnp.asarray(False),
             key=key,
         )
 
@@ -319,8 +397,34 @@ class iCemTO(BaseOptimizer):
             )
             cost = jnp.asarray(0.0)
 
-            # Standard case: use reward from system
-            reward = self.summarize_raw_samples(jnp.mean(transitions.reward, axis=-1))
+            if self.opt_params.reward_dynamics_source == "posterior_mean":
+                dynamics_params = opt_state.system_params.dynamics_params
+                if not hasattr(dynamics_params, "use_posterior_mean"):
+                    raise TypeError(
+                        "reward_dynamics_source='posterior_mean' requires "
+                        "dynamics parameters with a use_posterior_mean field."
+                    )
+                mean_dynamics_params = dynamics_params.replace(
+                    use_posterior_mean=jnp.asarray(True)
+                )
+                mean_system_params = opt_state.system_params.replace(
+                    dynamics_params=mean_dynamics_params,
+                    key=key,
+                )
+                mean_transitions = rollout_actions(
+                    system=self.system,
+                    system_params=mean_system_params,
+                    init_state=initial_state,
+                    horizon=self.horizon,
+                    actions=seq,
+                )
+                reward = jnp.mean(mean_transitions.reward, axis=-1)
+            else:
+                # Legacy behavior: summarize rewards over the same sampled
+                # particle rollouts used to estimate the safety constraint.
+                reward = self.summarize_raw_samples(
+                    jnp.mean(transitions.reward, axis=-1)
+                )
 
             if self.cost_fn is not None:
                 cost = vmap(self.cost_fn)(transitions.observation, transitions.action)
@@ -351,6 +455,19 @@ class iCemTO(BaseOptimizer):
             # Add noise, clip to [u_min, u_max], and reshape back
             new_action_samples = carry.mean + colored_samples * carry.std
             new_action_samples = jnp.clip(new_action_samples, self.opt_params.u_min, self.opt_params.u_max)
+            if self.opt_params.constraint_mode == "hard":
+                # Evaluate the proposal mean explicitly. On the first iCEM
+                # iteration this is the shifted incumbent under warm-starting,
+                # which gives a previously useful plan a deterministic chance
+                # to enter the feasible archive.
+                mean_candidate = jnp.clip(
+                    carry.mean,
+                    self.opt_params.u_min,
+                    self.opt_params.u_max,
+                )
+                new_action_samples = new_action_samples.at[-1].set(
+                    mean_candidate
+                )
 
             # Estimate every candidate with its own process-noise rollouts.
             # Epistemic GP scenarios remain fixed and prefix-coupled through
@@ -364,15 +481,73 @@ class iCemTO(BaseOptimizer):
             expected_shape = (self.opt_params.num_samples + num_prev_elites_per_iter,)
             assert rewards.shape == expected_shape
             assert costs.shape == expected_shape
-            penalty_values = rewards - self.opt_params.lambda_constraint * relu(costs)
+            if self.opt_params.constraint_mode == "hard":
+                best_elite_idx = _hard_constraint_elite_indices(
+                    rewards=rewards,
+                    costs=costs,
+                    num_elites=self.opt_params.num_elites,
+                    constraint_tolerance=self.opt_params.constraint_tolerance,
+                )
+                current_best_idx = best_elite_idx[-1]
+                current_reward = rewards[current_best_idx]
+                current_cost = costs[current_best_idx]
+                current_feasible = jnp.logical_and(
+                    jnp.logical_and(
+                        jnp.isfinite(current_reward),
+                        jnp.isfinite(current_cost),
+                    ),
+                    current_cost <= self.opt_params.constraint_tolerance,
+                )
+                current_value = jnp.where(
+                    current_feasible,
+                    current_reward,
+                    -current_cost,
+                )
 
-            best_elite_idx = jnp.argsort(penalty_values, axis=0)[-self.opt_params.num_elites:]
-            current_best_idx = best_elite_idx[-1]
-            current_reward = rewards[current_best_idx]
-            current_cost = costs[current_best_idx]
-            current_feasible = current_cost <= 0.0
-            current_value = penalty_values[current_best_idx]
-            use_current = current_value > carry.best_value
+                # Once a feasible candidate has been found, only a
+                # higher-reward feasible candidate may replace it. Before
+                # that, retain the least-violating candidate solely as an
+                # explicitly infeasible recovery action so the existing
+                # action-returning API remains defined. It is not a safe
+                # fallback; callers must inspect constraint_solver_failed.
+                better_feasible = jnp.logical_and(
+                    current_feasible,
+                    jnp.logical_or(
+                        jnp.logical_not(carry.any_feasible),
+                        current_reward > carry.best_reward,
+                    ),
+                )
+                equal_recovery_cost = current_cost == carry.best_cost
+                better_recovery = jnp.logical_and(
+                    jnp.logical_not(
+                        jnp.logical_or(carry.any_feasible, current_feasible)
+                    ),
+                    jnp.logical_or(
+                        current_cost < carry.best_cost,
+                        jnp.logical_and(
+                            equal_recovery_cost,
+                            current_reward > carry.best_reward,
+                        ),
+                    ),
+                )
+                use_current = jnp.logical_or(
+                    better_feasible,
+                    better_recovery,
+                )
+            else:
+                penalty_values = (
+                    rewards
+                    - self.opt_params.lambda_constraint * relu(costs)
+                )
+                best_elite_idx = jnp.argsort(
+                    penalty_values, axis=0
+                )[-self.opt_params.num_elites:]
+                current_best_idx = best_elite_idx[-1]
+                current_reward = rewards[current_best_idx]
+                current_cost = costs[current_best_idx]
+                current_feasible = current_cost <= 0.0
+                current_value = penalty_values[current_best_idx]
+                use_current = current_value > carry.best_value
 
             # Take elite actions.
             elites = action_samples[best_elite_idx]
@@ -388,12 +563,44 @@ class iCemTO(BaseOptimizer):
             # Compute std of the soft updated elites actions
             std = jnp.sqrt(var)
 
-            # Find the best action so far according to the penalized objective.
+            # Find the best action so far. In hard mode this is a feasible
+            # archive ordered by reward; until feasibility is reached it is a
+            # clearly marked, infeasible recovery candidate. Penalty mode
+            # preserves the original penalized-objective behavior.
             best_value = jnp.where(use_current, current_value, carry.best_value)
             best_reward = jnp.where(use_current, current_reward, carry.best_reward)
             best_cost = jnp.where(use_current, current_cost, carry.best_cost)
-            best_feasible = jnp.where(use_current, current_feasible, carry.best_feasible)
-            any_feasible = jnp.logical_or(carry.any_feasible, jnp.any(costs <= 0.0))
+            if self.opt_params.constraint_mode == "hard":
+                iteration_has_feasible = jnp.any(
+                    jnp.logical_and(
+                        jnp.logical_and(
+                            jnp.isfinite(rewards),
+                            jnp.isfinite(costs),
+                        ),
+                        costs <= self.opt_params.constraint_tolerance,
+                    )
+                )
+                any_feasible = jnp.logical_or(
+                    carry.any_feasible,
+                    iteration_has_feasible,
+                )
+                # Describe the archived best_sequence itself, rather than
+                # merely copying whether feasibility was observed somewhere.
+                best_feasible = jnp.where(
+                    use_current,
+                    current_feasible,
+                    carry.best_feasible,
+                )
+            else:
+                best_feasible = jnp.where(
+                    use_current,
+                    current_feasible,
+                    carry.best_feasible,
+                )
+                any_feasible = jnp.logical_or(
+                    carry.any_feasible,
+                    jnp.any(costs <= 0.0),
+                )
             best_sequence = jnp.where(
                 use_current,
                 action_samples[current_best_idx],
@@ -454,12 +661,22 @@ class iCemTO(BaseOptimizer):
             prev_elite_costs=prev_elite_costs,
         )
         carry, outs = jax.lax.scan(step, carry, xs=None, length=self.opt_params.num_steps)
+        if self.opt_params.constraint_mode == "hard":
+            reported_best_reward = carry.best_reward
+        else:
+            # Preserve the legacy penalty-mode diagnostic, whose
+            # ``best_reward`` field reports the penalized objective.
+            reported_best_reward = carry.best_value
         new_opt_state = new_opt_state.replace(
-            best_sequence=outs[1][-1, ...],
-            best_reward=outs[0][-1, ...],
+            best_sequence=carry.best_sequence,
+            best_reward=reported_best_reward,
             best_cost=carry.best_cost,
             best_feasible=carry.best_feasible,
             any_feasible=carry.any_feasible,
+            constraint_solver_failed=jnp.logical_and(
+                self.opt_params.constraint_mode == "hard",
+                jnp.logical_not(carry.best_feasible),
+            ),
         )
         return new_opt_state
 

@@ -15,7 +15,9 @@ from mbpo.systems.dynamics.base_dynamics import DynamicsParams as DummyDynamicsP
 from mbpo.systems.rewards.base_rewards import Reward, RewardParams
 
 from smbrl.dynamics_models.gp_sampling import (
+    RFFPriorState,
     RFFPosteriorState,
+    evaluate_rff_prior,
     evaluate_rff_posterior,
 )
 
@@ -24,14 +26,23 @@ from smbrl.dynamics_models.gp_sampling import (
 class DynamicsParams(Generic[ModelState, DummyDynamicsParams]):
     key: chex.PRNGKey
     model_state: ModelState
-    posterior_path_state: RFFPosteriorState | None = None
+    posterior_path_state: RFFPosteriorState | RFFPriorState | None = None
     sample_index: chex.Array = field(
         default_factory=lambda: jnp.asarray(0, dtype=jnp.int32)
+    )
+    use_posterior_mean: chex.Array = field(
+        default_factory=lambda: jnp.asarray(False)
     )
 
 
 class ExplorationDynamics(Dynamics, Generic[ModelState]):
-    GP_SAMPLE_TRUNCATION_MODES = {"none", "posterior", "prior"}
+    GP_SAMPLE_TRUNCATION_MODES = {
+        "none",
+        "posterior",
+        "prior",
+        "recursive",
+    }
+    GP_PATH_SOURCES = {"posterior", "prior"}
 
     def __init__(self,
                  x_dim: int,
@@ -42,6 +53,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                  aleatoric_noise_in_prediction: bool = True,
                  predict_difference: bool = True,
                  gp_sampling_method: str = "marginal",
+                 gp_path_source: str = "posterior",
                  rff_path_scale: float | None = None,
                  gp_sample_truncation: str = "none",
                  ):
@@ -57,10 +69,31 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                 f"got {gp_sampling_method!r}."
             )
         self.gp_sampling_method = gp_sampling_method
+        if gp_path_source not in self.GP_PATH_SOURCES:
+            raise ValueError(
+                "gp_path_source must be one of "
+                f"{sorted(self.GP_PATH_SOURCES)}, got {gp_path_source!r}."
+            )
+        if gp_path_source == "prior" and gp_sampling_method != "rff":
+            raise ValueError(
+                "Whole-run prior paths require gp_sampling_method='rff'."
+            )
+        self.gp_path_source = gp_path_source
         if rff_path_scale is not None and rff_path_scale < 0:
             raise ValueError(
                 f"rff_path_scale must be non-negative, got {rff_path_scale}."
             )
+        if (
+                gp_path_source == "prior"
+                and rff_path_scale is not None
+                and rff_path_scale != 1.0
+        ):
+            raise ValueError(
+                "Whole-run prior RFF paths are uninflated prior draws and require "
+                "rff_path_scale=1."
+            )
+        if gp_path_source == "prior" and rff_path_scale is None:
+            rff_path_scale = 1.0
         self.rff_path_scale = rff_path_scale
         if gp_sample_truncation not in self.GP_SAMPLE_TRUNCATION_MODES:
             raise ValueError(
@@ -69,6 +102,14 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                 f"got {gp_sample_truncation!r}."
             )
         self.gp_sample_truncation = gp_sample_truncation
+        if (
+                gp_sample_truncation == "recursive"
+                and gp_path_source != "prior"
+        ):
+            raise ValueError(
+                "Recursive confidence truncation requires "
+                "gp_path_source='prior'."
+            )
 
     def _prior_epistemic_std(
             self,
@@ -108,11 +149,22 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
             beta: chex.Array,
             z: chex.Array,
             model_state: ModelState,
+            path_state: RFFPosteriorState | RFFPriorState | None = None,
     ) -> chex.Array:
         """Projects a GP sample onto the selected beta-confidence tube."""
 
         if self.gp_sample_truncation == "none":
             return model_prediction
+        if self.gp_sample_truncation == "recursive":
+            if not isinstance(path_state, RFFPriorState):
+                raise TypeError(
+                    "Recursive truncation requires an RFFPriorState."
+                )
+            return self._recursively_truncate_prior_sample(
+                model_prediction=model_prediction,
+                z=z,
+                prior_state=path_state,
+            )
         if self.gp_sample_truncation == "posterior":
             truncation_std = posterior_epistemic_std
         else:
@@ -125,6 +177,66 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
             posterior_mean + truncation_radius,
         )
 
+    def _initial_prior_distribution(
+            self,
+            z: chex.Array,
+            prior_state: RFFPriorState,
+    ) -> tuple[chex.Array, chex.Array]:
+        """Returns the frozen online prior mean and epistemic std at ``z``."""
+
+        if prior_state.initial_model_state is not None:
+            prediction = self.model(z, prior_state.initial_model_state)
+            return prediction.mean, prediction.epistemic_std
+
+        path_state = prior_state.path_state
+        normalized_z = (
+            z - path_state.input_mean
+        ) / path_state.input_std
+        normalized_variance = self.model.model.m_kernel_multiple_output(
+            normalized_z[None, :],
+            normalized_z[None, :],
+            path_state.kernel_params,
+        )[:, 0, 0]
+        prior_std = (
+            jnp.sqrt(jnp.maximum(normalized_variance, 0.0))
+            * path_state.output_std
+        )
+        return path_state.output_mean, prior_std
+
+    def _recursively_truncate_prior_sample(
+            self,
+            model_prediction: chex.Array,
+            z: chex.Array,
+            prior_state: RFFPriorState,
+    ) -> chex.Array:
+        """Applies the paper's pointwise recursive clipping operation.
+
+        Re-evaluating every immutable posterior snapshot is equivalent to
+        constructing ``f_n(z)`` sequentially, while avoiding a discretization
+        of the continuous state-action domain.
+        """
+
+        initial_mean, initial_std = self._initial_prior_distribution(
+            z, prior_state
+        )
+        truncated_prediction = jnp.clip(
+            model_prediction,
+            initial_mean - prior_state.initial_beta * initial_std,
+            initial_mean + prior_state.initial_beta * initial_std,
+        )
+        for confidence_model_state in prior_state.confidence_model_states:
+            confidence_prediction = self.model(z, confidence_model_state)
+            confidence_radius = (
+                confidence_prediction.statistical_model_state.beta
+                * confidence_prediction.epistemic_std
+            )
+            truncated_prediction = jnp.clip(
+                truncated_prediction,
+                confidence_prediction.mean - confidence_radius,
+                confidence_prediction.mean + confidence_radius,
+            )
+        return truncated_prediction
+
     def init_params(self, key: chex.PRNGKey) -> DynamicsParams:
         param_key, model_state_key = jr.split(key, 2)
         model_state = self.model.init(model_state_key)
@@ -133,6 +245,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
             model_state=model_state,
             posterior_path_state=None,
             sample_index=jnp.asarray(0, dtype=jnp.int32),
+            use_posterior_mean=jnp.asarray(False),
         )
 
     def get_intrinsic_reward(self,
@@ -171,27 +284,49 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         else:
             if dynamics_params.posterior_path_state is None:
                 raise ValueError(
-                    "RFF dynamics require an episode posterior-path state."
+                    "RFF dynamics require a path state."
                 )
-            posterior_path_value = evaluate_rff_posterior(
-                model=self.model,
-                model_state=dynamics_params.model_state,
-                posterior_state=dynamics_params.posterior_path_state,
-                input_value=z,
-                path_index=dynamics_params.sample_index,
-            )
-            # Scale 1 is an approximate posterior draw.  A larger explicit
-            # scale keeps the same global path while inflating its residual
-            # around the exact GP mean (e.g. scale=beta for matching the
-            # one-point variance of the marginal sampler).
-            # By default, inherit the GP calibration multiplier so that the
-            # coherent sampler matches the one-point variance used by the
-            # existing marginal sampler.  Passing 1 explicitly gives a
-            # literal approximate posterior path.
-            path_scale = beta if self.rff_path_scale is None else self.rff_path_scale
-            model_prediction = pred.mean + path_scale * (
-                posterior_path_value - pred.mean
-            )
+            if self.gp_path_source == "prior":
+                if not isinstance(
+                        dynamics_params.posterior_path_state,
+                        RFFPriorState,
+                ):
+                    raise TypeError(
+                        "gp_path_source='prior' requires an RFFPriorState."
+                    )
+                model_prediction = evaluate_rff_prior(
+                    model=self.model,
+                    prior_state=dynamics_params.posterior_path_state,
+                    input_value=z,
+                    path_index=dynamics_params.sample_index,
+                )
+            else:
+                if not isinstance(
+                        dynamics_params.posterior_path_state,
+                        RFFPosteriorState,
+                ):
+                    raise TypeError(
+                        "gp_path_source='posterior' requires an "
+                        "RFFPosteriorState."
+                    )
+                posterior_path_value = evaluate_rff_posterior(
+                    model=self.model,
+                    model_state=dynamics_params.model_state,
+                    posterior_state=dynamics_params.posterior_path_state,
+                    input_value=z,
+                    path_index=dynamics_params.sample_index,
+                )
+                # Scale 1 is an approximate posterior draw.  A larger
+                # explicit scale keeps the same global path while inflating
+                # its residual around the exact GP mean.
+                path_scale = (
+                    beta
+                    if self.rff_path_scale is None
+                    else self.rff_path_scale
+                )
+                model_prediction = pred.mean + path_scale * (
+                    posterior_path_value - pred.mean
+                )
 
         model_prediction = self._truncate_gp_sample(
             model_prediction=model_prediction,
@@ -200,6 +335,16 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
             beta=beta,
             z=z,
             model_state=dynamics_params.model_state,
+            path_state=dynamics_params.posterior_path_state,
+        )
+        # Problem (8) evaluates task reward under the deterministic posterior
+        # mean dynamics while retaining sampled models for the safety
+        # constraints. iCEM opts into this branch only for its separate reward
+        # rollout; ordinary particle rollouts keep the legacy sampled dynamics.
+        model_prediction = jnp.where(
+            dynamics_params.use_posterior_mean,
+            pred.mean,
+            model_prediction,
         )
 
         if self.predict_difference:
@@ -212,6 +357,11 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
 
         if not self.aleatoric_noise_in_prediction:
             aleatoric_std = 0 * aleatoric_std
+        aleatoric_std = jnp.where(
+            dynamics_params.use_posterior_mean,
+            jnp.zeros_like(aleatoric_std),
+            aleatoric_std,
+        )
         # add intrinsic reward to the next state
         x_next_with_reward = jnp.concatenate([x_next, intrinsic_reward], axis=-1)
         aleatoric_std_with_reward = jnp.concatenate([aleatoric_std, jnp.zeros_like(intrinsic_reward)], axis=-1)
