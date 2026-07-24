@@ -108,14 +108,28 @@ class PositionBound(AbstractCost):
         self.max_position = max_position
         self.violation_eps = violation_eps
 
+    def constraint_margins(
+            self,
+            states: Float[Array, 'horizon observation_dim'],
+            actions: Float[Array, 'horizon action_dim'],
+    ) -> Float[Array, 'horizon']:
+        """Returns signed pointwise margins; positive means violation."""
+
+        del actions
+        position = states[:, 0]
+        margins = (
+            jnp.abs(position)
+            - (self.max_position - self.violation_eps)
+        )
+        assert margins.shape == (self.horizon,)
+        return margins
+
     def __call__(self,
                  states: Float[Array, 'horizon observation_dim'],
                  actions: Float[Array, 'horizon action_dim'],
                  ) -> Scalar:
-        position = states[:, 0]
-        trajectory_constraint = jnp.maximum(jnp.abs(position) - (self.max_position - self.violation_eps), 0.0)
-        assert trajectory_constraint.shape == (self.horizon,)
-        return jnp.sum(trajectory_constraint)
+        margins = self.constraint_margins(states, actions)
+        return jnp.sum(jnp.maximum(margins, 0.0))
 
 
 class PositionBoundBinary(AbstractCost):

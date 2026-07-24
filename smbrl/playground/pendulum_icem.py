@@ -108,15 +108,28 @@ class VelocityBound(AbstractCost):
         self.max_abs_velocity = max_abs_velocity
         self.violation_eps = violation_eps
 
+    def constraint_margins(
+            self,
+            states: Float[Array, 'horizon observation_dim'],
+            actions: Float[Array, 'horizon action_dim'],
+    ) -> Float[Array, 'horizon']:
+        """Returns signed pointwise margins; positive means violation."""
+
+        del actions
+        angular_velocity = states[:, -1]
+        margins = (
+            jnp.abs(angular_velocity)
+            - (self.max_abs_velocity - self.violation_eps)
+        )
+        assert margins.shape == (self.horizon,)
+        return margins
+
     def __call__(self,
                  states: Float[Array, 'horizon observation_dim'],
                  actions: Float[Array, 'horizon action_dim'],
                  ) -> Scalar:
-        angular_velocity = states[:, -1]
-        trajectory_constraint = jnp.maximum(jnp.abs(angular_velocity) - (self.max_abs_velocity - self.violation_eps),
-                                            0.0)
-        assert trajectory_constraint.shape == (self.horizon,)
-        return jnp.sum(trajectory_constraint)
+        margins = self.constraint_margins(states, actions)
+        return jnp.sum(jnp.maximum(margins, 0.0))
 
 
 class VelocityBoundBinary(AbstractCost):

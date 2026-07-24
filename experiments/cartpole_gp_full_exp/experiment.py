@@ -40,6 +40,7 @@ def experiment(
         use_precomputed_kernel_params: bool = False,
         use_function_norms: bool = False,
         num_offline_data: int = 0,
+        num_safe_offline_data: int = 1,
         violation_eps: float = 0.1,
         optimizer: str = 'icem',
         lambda_sigma: float = 0.0,
@@ -120,6 +121,7 @@ def experiment(
         use_precomputed_kernel_params=use_precomputed_kernel_params,
         use_function_norms=use_function_norms,
         num_offline_data=num_offline_data,
+        num_safe_offline_data=num_safe_offline_data,
         optimizer=optimizer,
         lambda_sigma=lambda_sigma,
         uncertainty_eps=uncertainty_eps,
@@ -175,32 +177,55 @@ def experiment(
 
     # Choose data collection method based on num_traj parameter
     if num_traj == 0:
-        # Use original uniform grid data collection
+        if not 0 <= num_safe_offline_data <= num_offline_data:
+            raise ValueError(
+                "num_safe_offline_data must lie between zero and "
+                f"num_offline_data={num_offline_data}, got "
+                f"{num_safe_offline_data}."
+            )
+        # Keep the total D0 size fixed while optionally replacing uniformly
+        # random points with a local design around the known safe equilibrium.
         offline_data_sampler = CartPoleOfflineData(action_repeat=action_repeat,
                                                    predict_difference=True)
-        num_random_offline_data = max(num_offline_data - 1, 0)
-        offline_data = offline_data_sampler.sample(
-            key=key_offline_data,
+        key_random_data, key_safe_data = jr.split(key_offline_data)
+        num_random_offline_data = (
+            num_offline_data - num_safe_offline_data
+        )
+        random_offline_data = offline_data_sampler.sample(
+            key=key_random_data,
             num_samples=num_random_offline_data,
             max_abs_lin_position=1.0,
             max_abs_ang_velocity=5.0,
             max_abs_lin_velocity=5.0,
         )
-        if num_offline_data > 0:
+        offline_data_parts = []
+        if num_safe_offline_data > 0:
             # Keep one exact transition at the stable downward equilibrium in
             # the data passed to model.update().  Setting model_state.history
             # alone is insufficient because GP training replaces that history
             # with this offline dataset.
             equilibrium_input = jnp.array([0., 1., 0., 0., 0., 0.])
             equilibrium_output = offline_data_sampler.dynamics_fn(equilibrium_input)
-            offline_data = Data(
-                inputs=jnp.concatenate(
-                    [equilibrium_input[None, :], offline_data.inputs], axis=0
-                ),
-                outputs=jnp.concatenate(
-                    [equilibrium_output[None, :], offline_data.outputs], axis=0
-                ),
+            offline_data_parts.append(Data(
+                inputs=equilibrium_input[None, :],
+                outputs=equilibrium_output[None, :],
+            ))
+        if num_safe_offline_data > 1:
+            offline_data_parts.append(
+                offline_data_sampler.sample_near_downward_equilibrium(
+                    key=key_safe_data,
+                    num_samples=num_safe_offline_data - 1,
+                )
             )
+        offline_data_parts.append(random_offline_data)
+        offline_data = Data(
+            inputs=jnp.concatenate(
+                [part.inputs for part in offline_data_parts], axis=0
+            ),
+            outputs=jnp.concatenate(
+                [part.outputs for part in offline_data_parts], axis=0
+            ),
+        )
     else:
         # Use trajectory-based data collection
         offline_data_traj = CartPoleTrajectoryOfflineData(action_repeat=1)
@@ -525,6 +550,7 @@ def main(args):
         use_precomputed_kernel_params=bool(args.use_precomputed_kernel_params),
         use_function_norms=bool(args.use_function_norms),
         num_offline_data=args.num_offline_data,
+        num_safe_offline_data=args.num_safe_offline_data,
         violation_eps=args.violation_eps,
         optimizer=args.optimizer,
         lambda_sigma=args.lambda_sigma,
@@ -615,6 +641,15 @@ if __name__ == '__main__':
     parser.add_argument('--use_precomputed_kernel_params', type=int, default=0)
     parser.add_argument('--use_function_norms', type=int, default=0)
     parser.add_argument('--num_offline_data', type=int, default=10)
+    parser.add_argument(
+        '--num_safe_offline_data',
+        type=int,
+        default=1,
+        help=(
+            'Number of D0 points reserved for the known safe downward region, '
+            'including one exact equilibrium transition.'
+        ),
+    )
     parser.add_argument('--violation_eps', type=float, default=0.1)
     parser.add_argument('--optimizer', type=str, default='icem')
 

@@ -204,6 +204,28 @@ class CartPoleOfflineData:
 
         return Data(inputs=inputs, outputs=outputs)
 
+    def sample_near_downward_equilibrium(
+            self,
+            key: Float[Array, '2'],
+            num_samples: int,
+            max_abs_lin_position: float = 0.1,
+            max_abs_angle: float = 0.05,
+            max_abs_lin_velocity: float = 0.1,
+            max_abs_ang_velocity: float = 0.1,
+            max_abs_action: float = 0.05,
+    ) -> Data:
+        """Samples a local safe-design cloud around the downward equilibrium."""
+
+        return self.sample(
+            key=key,
+            num_samples=num_samples,
+            max_abs_lin_position=max_abs_lin_position,
+            max_abs_angle=max_abs_angle,
+            max_abs_lin_velocity=max_abs_lin_velocity,
+            max_abs_ang_velocity=max_abs_ang_velocity,
+            max_abs_action=max_abs_action,
+        )
+
 
 class CartPoleTrajectoryOfflineData:
     """

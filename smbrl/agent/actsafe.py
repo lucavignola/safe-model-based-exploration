@@ -480,6 +480,28 @@ class SafeModelBasedAgent:
             "or provide a separately verified safe fallback controller."
         )
 
+    def _signed_constraint_cost(
+            self,
+            states: chex.Array,
+            actions: chex.Array,
+            positive_cost: chex.Array,
+    ) -> chex.Array:
+        """Extends the nonnegative trajectory cost with a safe-side margin.
+
+        For a violating trajectory this is exactly the usual summed ReLU cost.
+        When there is no violation, it is the largest signed pointwise margin,
+        so negative values report the minimum slack to the boundary.
+        """
+
+        if not hasattr(self.cost_fn_env, 'constraint_margins'):
+            return positive_cost
+        margins = self.cost_fn_env.constraint_margins(states, actions)
+        return jnp.where(
+            positive_cost > 0,
+            positive_cost,
+            jnp.max(margins),
+        )
+
     def test_a_task(self,
                     model_state: ModelState,
                     key: Key[Array, '2'],
@@ -721,10 +743,21 @@ class SafeModelBasedAgent:
         self.latest_planning_recovery_cost_max = float(
             jnp.max(recovery_costs)
         )
-        costs = self.cost_fn_env(collected_states.obs[:-1], actions)
-        position = collected_states.obs[:-1][:, 0]
-        trajectory_constraint = jnp.abs(position) - 1.5
-        return collected_states, actions, intrinsic_rewards, extrinsic_rewards, costs, jnp.sum(trajectory_constraint)
+        rollout_states = collected_states.obs[:-1]
+        costs = self.cost_fn_env(rollout_states, actions)
+        signed_constraint_cost = self._signed_constraint_cost(
+            states=rollout_states,
+            actions=actions,
+            positive_cost=costs,
+        )
+        return (
+            collected_states,
+            actions,
+            intrinsic_rewards,
+            extrinsic_rewards,
+            costs,
+            signed_constraint_cost,
+        )
 
     def from_collected_transitions_to_data(self,
                                            collected_states: PyTree[Array, 'episode_length ...'],

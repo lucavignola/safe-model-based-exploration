@@ -37,6 +37,11 @@ def build_sweep_configs(
         seeds=None,
         num_rff_features=512,
         function_norm=FUNCTION_NORM_SWEEP,
+        num_offline_data=18,
+        num_safe_offline_data=1,
+        num_samples=1_000,
+        num_elites=100,
+        num_steps=5,
         use_empirical_function_norms=False,
         rkhs_norm_safety_factor=1.0,
         confidence_delta=0.05,
@@ -80,9 +85,9 @@ def build_sweep_configs(
         "violation_eps": [0.0],
         "num_gpus": [1],
         "num_training_steps": [0],
-        "num_samples": [1_000],
-        "num_elites": [100],
-        "num_steps": [5],
+        "num_samples": [num_samples],
+        "num_elites": [num_elites],
+        "num_steps": [num_steps],
         "alpha": [0.2],
         "exponent": [1.0],
         "lambda_constraint": [0.0],
@@ -90,7 +95,8 @@ def build_sweep_configs(
         "episode_length": [50],
         "num_episodes": [5],
         "action_repeat": [2],
-        "num_offline_data": [18],
+        "num_offline_data": [num_offline_data],
+        "num_safe_offline_data": [num_safe_offline_data],
         "num_traj": [0],
         "max_position": [1.5],
         "use_optimism": [0],
@@ -114,6 +120,11 @@ def main(args):
         seeds=args.seeds,
         num_rff_features=args.num_rff_features,
         function_norm=args.function_norm,
+        num_offline_data=args.num_offline_data,
+        num_safe_offline_data=args.num_safe_offline_data,
+        num_samples=args.num_samples,
+        num_elites=args.num_elites,
+        num_steps=args.num_steps,
         use_empirical_function_norms=args.use_empirical_function_norms,
         rkhs_norm_safety_factor=args.rkhs_norm_safety_factor,
         confidence_delta=args.confidence_delta,
@@ -160,6 +171,19 @@ if __name__ == "__main__":
     parser.add_argument("--particles", type=int, nargs="+", default=PARTICLE_SWEEP)
     parser.add_argument("--seeds", type=int, nargs="+", default=list(range(5)))
     parser.add_argument("--num_rff_features", type=int, default=512)
+    parser.add_argument("--num_samples", type=int, default=1_000)
+    parser.add_argument("--num_elites", type=int, default=100)
+    parser.add_argument("--num_steps", type=int, default=5)
+    parser.add_argument("--num_offline_data", type=int, default=18)
+    parser.add_argument(
+        "--num_safe_offline_data",
+        type=int,
+        default=1,
+        help=(
+            "D0 points assigned to the local safe-equilibrium design; the "
+            "remaining points stay uniformly random."
+        ),
+    )
     parser.add_argument(
         "--function_norm",
         type=float,
