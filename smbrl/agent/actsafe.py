@@ -70,6 +70,8 @@ class SafeModelBasedAgent:
                  aleatoric_noise_in_prediction: bool = True,
                  gp_prior_condition_on_initial_data: bool = False,
                  constraint_failure_mode: str = 'recovery',
+                 num_evaluation_trajectories: int = 1,
+                 log_gp_diagnostics: bool = False,
                  ):
         assert train_task_index >= -1
         assert train_task_index <= len(test_tasks)
@@ -148,22 +150,6 @@ class SafeModelBasedAgent:
         self.gp_prior_condition_on_initial_data = (
             gp_prior_condition_on_initial_data
         )
-        if (
-                gp_prior_condition_on_initial_data
-                and gp_path_source != 'prior'
-        ):
-            raise ValueError(
-                "gp_prior_condition_on_initial_data=True requires "
-                "gp_path_source='prior'."
-            )
-        if (
-                gp_sample_truncation == 'recursive'
-                and gp_path_source != 'prior'
-        ):
-            raise ValueError(
-                "Recursive confidence truncation requires "
-                "gp_path_source='prior'."
-            )
         self._fixed_prior_path_state: RFFPriorState | None = None
         if constraint_failure_mode not in {'recovery', 'raise'}:
             raise ValueError(
@@ -172,6 +158,13 @@ class SafeModelBasedAgent:
                 f"got {constraint_failure_mode!r}."
             )
         self.constraint_failure_mode = constraint_failure_mode
+        if num_evaluation_trajectories < 1:
+            raise ValueError(
+                "num_evaluation_trajectories must be positive, got "
+                f"{num_evaluation_trajectories}."
+            )
+        self.num_evaluation_trajectories = num_evaluation_trajectories
+        self.log_gp_diagnostics = log_gp_diagnostics
         self.latest_planning_feasible_fraction = 0.0
         self.latest_planning_any_feasible_fraction = 0.0
         self.latest_planning_solver_failure_fraction = 0.0
@@ -329,6 +322,7 @@ class SafeModelBasedAgent:
         if (
                 prior_state is None
                 or self.gp_sample_truncation != 'recursive'
+                or self.gp_path_source != 'prior'
         ):
             return {}
 
@@ -519,71 +513,99 @@ class SafeModelBasedAgent:
             dynamics=exploration_dynamics,
             reward=task.reward,
         )
-        key, subkey = jr.split(key)
+        trajectory_outputs = []
+        trajectory_costs = []
+        trajectory_rewards = []
+        for trajectory_idx, trajectory_key in enumerate(
+                jr.split(key, self.num_evaluation_trajectories)
+        ):
+            optimizer_key, init_key, env_key = jr.split(trajectory_key, 3)
+            if self.optimizer == 'icem':
+                optimizer = iCemTO(
+                    horizon=self.icem_horizon,
+                    action_dim=self.env.action_size,
+                    key=optimizer_key,
+                    opt_params=self.icem_params,
+                    system=learned_system,
+                    cost_fn=self.cost_fn,
+                    use_optimism=self.use_optimism,
+                    use_pessimism=self.use_pessimism,
+                )
+            optimizer_state = optimizer.init(key=init_key)
 
-        if self.optimizer == 'icem':
-            optimizer = iCemTO(
-                horizon=self.icem_horizon,
-                action_dim=self.env.action_size,
-                key=subkey,
-                opt_params=self.icem_params,
-                system=learned_system,
-                cost_fn=self.cost_fn,
-                use_optimism=self.use_optimism,
-                use_pessimism=self.use_pessimism,
+            dynamics_params = (
+                optimizer_state.system_params.dynamics_params.replace(
+                    model_state=model_state,
+                    posterior_path_state=posterior_path_state,
+                    recursive_prior_state=self._fixed_prior_path_state,
+                )
             )
-        # elif self.optimizer == 'ipopt':
-        #     optimizer = IPOPTOptimizer(
-        #         horizon=self.icem_horizon,
-        #         action_dim=self.env.action_size,
-        #         key=subkey,
-        #         opt_params=self.ipopt_params,
-        #         system=learned_system,
-        #         cost_fn=self.cost_fn,
-        #         use_optimism=self.use_optimism,
-        #         use_pessimism=self.use_pessimism,
-        #     )
-
-        key, subkey = jr.split(key)
-        optimizer_state = optimizer.init(key=subkey)
-
-        dynamics_params = optimizer_state.system_params.dynamics_params.replace(
-            model_state=model_state,
-            posterior_path_state=posterior_path_state,
-        )
-        system_params = optimizer_state.system_params.replace(dynamics_params=dynamics_params)
-        optimizer_state = optimizer_state.replace(system_params=system_params)
-
-        env_state = task.env.reset(rng=key)
-
-        collected_states = [env_state]
-        actions = []
-
-        for i in range(self.episode_length):
-            action, optimizer_state = optimizer.act(env_state.obs, optimizer_state)
-            self._handle_constraint_solver_failure(
-                optimizer_state,
-                step=i,
-                context=f"evaluation task {task.name!r}",
+            system_params = optimizer_state.system_params.replace(
+                dynamics_params=dynamics_params
             )
-            for _ in range(self.action_repeat):
-                env_state = self.env.step(env_state, action)
-            collected_states.append(env_state)
-            actions.append(action)
+            optimizer_state = optimizer_state.replace(
+                system_params=system_params
+            )
 
-        collected_states = jt.map(lambda *xs: jnp.stack(xs), *collected_states)
-        actions = jt.map(lambda *xs: jnp.stack(xs), *actions)
-        # get task reward
-        state = collected_states.obs[:-1]
-        next_state = collected_states.obs[1:]
-        reward_params = system_params.reward_params
-        rewards_dist, _ = jax.vmap(task.reward, in_axes=(0, 0, None, 0))(state, actions, reward_params, next_state)
-        rewards = rewards_dist.mean()
-        costs = self.cost_fn_env(state, actions)
+            env_state = task.env.reset(rng=env_key)
+            collected_states = [env_state]
+            actions = []
+            for step in range(self.episode_length):
+                action, optimizer_state = optimizer.act(
+                    env_state.obs, optimizer_state
+                )
+                self._handle_constraint_solver_failure(
+                    optimizer_state,
+                    step=step,
+                    context=(
+                        f"evaluation task {task.name!r}, trajectory "
+                        f"{trajectory_idx}"
+                    ),
+                )
+                for _ in range(self.action_repeat):
+                    env_state = task.env.step(env_state, action)
+                collected_states.append(env_state)
+                actions.append(action)
+
+            collected_states = jt.map(
+                lambda *xs: jnp.stack(xs), *collected_states
+            )
+            actions = jt.map(lambda *xs: jnp.stack(xs), *actions)
+            state = collected_states.obs[:-1]
+            next_state = collected_states.obs[1:]
+            reward_params = system_params.reward_params
+            rewards_dist, _ = jax.vmap(
+                task.reward, in_axes=(0, 0, None, 0)
+            )(state, actions, reward_params, next_state)
+            rewards = rewards_dist.mean()
+            cost = self.cost_fn_env(state, actions)
+            trajectory_outputs.append((collected_states, actions, rewards))
+            trajectory_costs.append(cost)
+            trajectory_rewards.append(jnp.sum(rewards))
+
+        costs = jnp.stack(trajectory_costs)
+        total_rewards = jnp.stack(trajectory_rewards)
         metrics = {
-            f'total_reward_{task.name}': jnp.sum(rewards).item(),
-            f'cost_{task.name}': costs.item(),
+            f'total_reward_{task.name}': jnp.mean(total_rewards).item(),
+            f'cost_{task.name}': jnp.mean(costs).item(),
+            f'max_cost_{task.name}': jnp.max(costs).item(),
+            f'violating_trajectory_count_{task.name}': int(
+                jnp.sum(costs > 0.0)
+            ),
         }
+        if self.num_evaluation_trajectories == 1:
+            collected_states, actions, rewards = trajectory_outputs[0]
+        else:
+            collected_states = jt.map(
+                lambda *xs: jnp.stack(xs),
+                *(output[0] for output in trajectory_outputs),
+            )
+            actions = jnp.stack(
+                [output[1] for output in trajectory_outputs]
+            )
+            rewards = jnp.stack(
+                [output[2] for output in trajectory_outputs]
+            )
         return collected_states, actions, rewards, metrics
 
     def get_train_rewards(self) -> Reward:
@@ -598,6 +620,15 @@ class SafeModelBasedAgent:
         return {}
 
     def on_episode_end(self, episode_idx: int) -> None:
+        return None
+
+    def on_model_update(
+            self,
+            model_state: ModelState,
+            episode_idx: int,
+    ) -> None:
+        """Hook for episode-dependent quantities that use the current model."""
+
         return None
 
     def on_exploration_rollout_end(self,
@@ -665,6 +696,7 @@ class SafeModelBasedAgent:
         dynamics_params = optimizer_state.system_params.dynamics_params.replace(
             model_state=model_state,
             posterior_path_state=posterior_path_state,
+            recursive_prior_state=self._fixed_prior_path_state,
         )
         system_params = optimizer_state.system_params.replace(dynamics_params=dynamics_params)
         optimizer_state = optimizer_state.replace(system_params=system_params)
@@ -781,8 +813,12 @@ class SafeModelBasedAgent:
                    train_model: bool = True,
                    folder_name: str = 'experiment_2024'
                    ) -> (ModelState, Data):
-        initialize_prior = (
+        needs_retained_prior_state = (
                 self.gp_path_source == 'prior'
+                or self.gp_sample_truncation == 'recursive'
+        )
+        initialize_prior = (
+                needs_retained_prior_state
                 and self._fixed_prior_path_state is None
         )
         if (
@@ -821,11 +857,16 @@ class SafeModelBasedAgent:
                 episode_key=key,
                 condition_on_initial_data=True,
             )
-        elif self.gp_path_source == 'prior' and train_model:
+        elif self.gp_sample_truncation == 'recursive' and train_model:
             # Every subsequent real-data update contributes the next
             # beta_n sigma_n tube. In the unconditioned-prior lifecycle this
             # also includes an optional D0 update.
             self._append_fixed_prior_confidence(model_state)
+
+        self.on_model_update(
+            model_state=model_state,
+            episode_idx=episode_idx,
+        )
 
         posterior_path_state = self.sample_episode_posterior_paths(
             model_state=model_state,
@@ -852,28 +893,50 @@ class SafeModelBasedAgent:
         # plt.show()
 
         if self.log_to_wandb:
+            if hasattr(self.cost_fn_env, 'constraint_margins'):
+                constraint_margins = self.cost_fn_env.constraint_margins(
+                    exploration_states.obs[:-1],
+                    exploration_actions,
+                )
+                constraint_violation_count = int(
+                    jnp.sum(constraint_margins > 0.0)
+                )
+                constraint_max_violation = float(
+                    jnp.maximum(jnp.max(constraint_margins), 0.0)
+                )
+            else:
+                constraint_violation_count = int(cost > 0.0)
+                constraint_max_violation = float(cost)
             metrics = {
                 'episode_idx': episode_idx,
                 'intrinsic_rewards': jnp.sum(intrinsic_rewards).item(),
                 'extrinsic_rewards': jnp.sum(extrinsic_rewards).item(),
                 'constraint_cost': cost.item(),
                 'trajectory_constraint': trajectory_constraint.item(),
+                'constraint_violation_count':
+                    constraint_violation_count,
+                'constraint_max_violation':
+                    constraint_max_violation,
                 'planning_solver_failure_fraction':
                     self.latest_planning_solver_failure_fraction,
                 'planning_recovery_cost_max':
                     self.latest_planning_recovery_cost_max,
             }
-            if self._fixed_prior_path_state is not None:
+            if (
+                    self.log_gp_diagnostics
+                    and self._fixed_prior_path_state is not None
+            ):
                 metrics.update(self._visited_path_clipping_metrics(
                     states=exploration_states.obs[:-1],
                     actions=exploration_actions,
                 ))
-            metrics.update(self._visited_gp_calibration_metrics(
-                model_state=model_state,
-                states=exploration_states.obs[:-1],
-                actions=exploration_actions,
-                next_states=exploration_states.obs[1:],
-            ))
+            if self.log_gp_diagnostics:
+                metrics.update(self._visited_gp_calibration_metrics(
+                    model_state=model_state,
+                    states=exploration_states.obs[:-1],
+                    actions=exploration_actions,
+                    next_states=exploration_states.obs[1:],
+                ))
             if hasattr(self, 'action_cost'):
                 action_tolerance = ToleranceReward(bounds=(-0.1, 0.1), margin=0.1, sigmoid='gaussian')
                 action_penalty = getattr(self, 'action_cost') * jnp.sum(1 - action_tolerance(exploration_actions))

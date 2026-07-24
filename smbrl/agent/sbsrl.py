@@ -174,6 +174,7 @@ class SBSRLAgent(SafeModelBasedAgent):
                  uncertainty_decay_factor: float = 10.0,
                  uncertainty_decay_mode: str = 'linear',
                  uncertainty_constraint_threshold: float = 50.0,
+                 uncertainty_scale_with_beta: bool = False,
                  action_cost: float = 0.0,
                  *args, **kwargs):
         # Remove SBSRL-specific parameters from kwargs before passing to parent
@@ -184,6 +185,7 @@ class SBSRLAgent(SafeModelBasedAgent):
             'uncertainty_decay_factor': uncertainty_decay_factor,
             'uncertainty_decay_mode': uncertainty_decay_mode,
             'uncertainty_constraint_threshold': uncertainty_constraint_threshold,
+            'uncertainty_scale_with_beta': uncertainty_scale_with_beta,
             'action_cost': action_cost,
         }
 
@@ -197,10 +199,13 @@ class SBSRLAgent(SafeModelBasedAgent):
         self.default_task_index = default_task_index
         self.lambda_sigma = lambda_sigma
         self.initial_uncertainty_eps = uncertainty_eps
+        self._scheduled_uncertainty_eps = uncertainty_eps
         self.uncertainty_eps = uncertainty_eps
         self.uncertainty_decay_factor = uncertainty_decay_factor
         self.uncertainty_decay_mode = uncertainty_decay_mode
         self.uncertainty_constraint_threshold = uncertainty_constraint_threshold
+        self.uncertainty_scale_with_beta = uncertainty_scale_with_beta
+        self.latest_uncertainty_beta = 1.0
         self.action_cost = action_cost
         self.uncertainty_constraint_enabled = True
         self.latest_uncertainty_penalty_mean = 0.0
@@ -211,7 +216,29 @@ class SBSRLAgent(SafeModelBasedAgent):
             'sbsrl/eps_sigma': float(self.uncertainty_eps),
             'sbsrl/uncertainty_penalty_mean': float(self.latest_uncertainty_penalty_mean),
             'sbsrl/uncertainty_constraint_enabled': float(self.uncertainty_constraint_enabled),
+            'sbsrl/uncertainty_beta': float(self.latest_uncertainty_beta),
         }
+
+    def _apply_uncertainty_beta_scale(self) -> None:
+        if not self.uncertainty_constraint_enabled:
+            self.uncertainty_eps = 0.0
+        elif self.uncertainty_scale_with_beta:
+            self.uncertainty_eps = (
+                self._scheduled_uncertainty_eps
+                / max(self.latest_uncertainty_beta, 1e-8)
+            )
+        else:
+            self.uncertainty_eps = self._scheduled_uncertainty_eps
+        if self._sbsrl_reward is not None:
+            self._sbsrl_reward.eps_sigma = self.uncertainty_eps
+
+    def on_model_update(self, model_state, episode_idx: int) -> None:
+        """Sets d_sigma^n from the current GP confidence multiplier."""
+
+        del episode_idx
+        beta = jnp.asarray(model_state.beta)
+        self.latest_uncertainty_beta = float(jnp.max(beta))
+        self._apply_uncertainty_beta_scale()
 
     def on_exploration_rollout_end(self,
                                    episode_idx: int,
@@ -223,6 +250,7 @@ class SBSRLAgent(SafeModelBasedAgent):
         self.latest_uncertainty_penalty_mean = float(jnp.mean(penalty))
         if self.uncertainty_constraint_enabled and (
                 self.latest_uncertainty_penalty_mean > self.uncertainty_constraint_threshold):
+            self._scheduled_uncertainty_eps = 0.0
             self.uncertainty_eps = 0.0
             self.uncertainty_constraint_enabled = False
             if self._sbsrl_reward is not None:
@@ -258,15 +286,20 @@ class SBSRLAgent(SafeModelBasedAgent):
         if self.train_task_index == -1:
             if self.uncertainty_constraint_enabled:
                 if self.uncertainty_decay_mode == 'linear':
-                    self.uncertainty_eps = self.uncertainty_eps / self.uncertainty_decay_factor
+                    self._scheduled_uncertainty_eps = (
+                        self._scheduled_uncertainty_eps
+                        / self.uncertainty_decay_factor
+                    )
                 elif self.uncertainty_decay_mode == 'log_sigma_eps':
-                    self.uncertainty_eps = self.initial_uncertainty_eps / (1.0 + jnp.log(episode_idx + 2.0))
+                    self._scheduled_uncertainty_eps = (
+                        self.initial_uncertainty_eps
+                        / (1.0 + jnp.log(episode_idx + 2.0))
+                    )
                 else:
                     raise ValueError(f'Unknown uncertainty_decay_mode {self.uncertainty_decay_mode}')
             else:
-                self.uncertainty_eps = 0.0
-            if self._sbsrl_reward is not None:
-                self._sbsrl_reward.eps_sigma = self.uncertainty_eps
+                self._scheduled_uncertainty_eps = 0.0
+            self._apply_uncertainty_beta_scale()
             if self.log_to_wandb:
                 import wandb
                 wandb.log({

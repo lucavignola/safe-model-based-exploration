@@ -27,6 +27,7 @@ class DynamicsParams(Generic[ModelState, DummyDynamicsParams]):
     key: chex.PRNGKey
     model_state: ModelState
     posterior_path_state: RFFPosteriorState | RFFPriorState | None = None
+    recursive_prior_state: RFFPriorState | None = None
     sample_index: chex.Array = field(
         default_factory=lambda: jnp.asarray(0, dtype=jnp.int32)
     )
@@ -102,15 +103,6 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                 f"got {gp_sample_truncation!r}."
             )
         self.gp_sample_truncation = gp_sample_truncation
-        if (
-                gp_sample_truncation == "recursive"
-                and gp_path_source != "prior"
-        ):
-            raise ValueError(
-                "Recursive confidence truncation requires "
-                "gp_path_source='prior'."
-            )
-
     def _prior_epistemic_std(
             self,
             z: chex.Array,
@@ -150,20 +142,27 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
             z: chex.Array,
             model_state: ModelState,
             path_state: RFFPosteriorState | RFFPriorState | None = None,
+            recursive_prior_state: RFFPriorState | None = None,
     ) -> chex.Array:
         """Projects a GP sample onto the selected beta-confidence tube."""
 
         if self.gp_sample_truncation == "none":
             return model_prediction
         if self.gp_sample_truncation == "recursive":
-            if not isinstance(path_state, RFFPriorState):
+            confidence_state = recursive_prior_state
+            if confidence_state is None and isinstance(
+                    path_state, RFFPriorState
+            ):
+                confidence_state = path_state
+            if not isinstance(confidence_state, RFFPriorState):
                 raise TypeError(
-                    "Recursive truncation requires an RFFPriorState."
+                    "Recursive truncation requires a retained confidence "
+                    "history state."
                 )
             return self._recursively_truncate_prior_sample(
                 model_prediction=model_prediction,
                 z=z,
-                prior_state=path_state,
+                prior_state=confidence_state,
             )
         if self.gp_sample_truncation == "posterior":
             truncation_std = posterior_epistemic_std
@@ -336,6 +335,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
             z=z,
             model_state=dynamics_params.model_state,
             path_state=dynamics_params.posterior_path_state,
+            recursive_prior_state=dynamics_params.recursive_prior_state,
         )
         # Problem (8) evaluates task reward under the deterministic posterior
         # mean dynamics while retaining sampled models for the safety

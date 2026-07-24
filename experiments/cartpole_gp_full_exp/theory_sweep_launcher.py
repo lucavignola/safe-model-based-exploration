@@ -24,6 +24,23 @@ PARTICLE_SWEEP = [1, 10, 20, 30, 40, 50]
 # Practical clipping/calibration hyperparameter sweep. Edit this list or
 # override it with, for example, ``--function_norm 0.5 1.0 2.0``.
 FUNCTION_NORM_SWEEP = [1.0]
+SAMPLING_MODE_CONFIGS = {
+    "prior": {
+        "gp_sampling_method": "rff",
+        "gp_path_source": "prior",
+        "gp_sample_truncation": "recursive",
+    },
+    "posterior": {
+        "gp_sampling_method": "rff",
+        "gp_path_source": "posterior",
+        "gp_sample_truncation": "recursive",
+    },
+    "ts1": {
+        "gp_sampling_method": "marginal",
+        "gp_path_source": "posterior",
+        "gp_sample_truncation": "recursive",
+    },
+}
 
 HARDWARE_CONFIGS = {
     "4090_rtx": {"gpu_type": "rtx_4090", "cpus_per_task": 10},
@@ -37,17 +54,20 @@ def build_sweep_configs(
         seeds=None,
         num_rff_features=512,
         function_norm=FUNCTION_NORM_SWEEP,
+        sampling_modes=("prior",),
         num_offline_data=18,
         num_safe_offline_data=1,
         num_samples=1_000,
         num_elites=100,
         num_steps=5,
+        num_evaluation_trajectories=5,
+        log_gp_diagnostics=False,
         use_empirical_function_norms=False,
         rkhs_norm_safety_factor=1.0,
         confidence_delta=0.05,
         information_gain_bound="diagonal",
 ):
-    """Builds the fixed-prior, recursive-truncation, hard-iCEM sweep."""
+    """Builds matched hard-iCEM sweeps over the requested GP path modes."""
 
     if particle_sweep is None:
         particle_sweep = PARTICLE_SWEEP
@@ -58,17 +78,31 @@ def build_sweep_configs(
         if isinstance(function_norm, (list, tuple))
         else [function_norm]
     )
+    sampling_modes = (
+        list(sampling_modes)
+        if isinstance(sampling_modes, (list, tuple))
+        else [sampling_modes]
+    )
+    offline_data_sweep = (
+        list(num_offline_data)
+        if isinstance(num_offline_data, (list, tuple))
+        else [num_offline_data]
+    )
+    safe_offline_data_sweep = (
+        list(num_safe_offline_data)
+        if isinstance(num_safe_offline_data, (list, tuple))
+        else [num_safe_offline_data]
+    )
+    unknown_modes = set(sampling_modes) - set(SAMPLING_MODE_CONFIGS)
+    if unknown_modes:
+        raise ValueError(f"Unknown sampling modes: {sorted(unknown_modes)}")
     config = {
         "alg_name": ["SBSRL"],
         "project_name": [PROJECT_NAME],
         "entity_name": [ENTITY_NAME],
         "seed": list(seeds),
         "num_particles": list(particle_sweep),
-        "gp_sampling_method": ["rff"],
-        "gp_path_source": ["prior"],
-        "gp_sample_truncation": ["recursive"],
         "aleatoric_noise_in_prediction": [0],
-        "gp_prior_condition_on_initial_data": [1],
         "num_rff_features": [num_rff_features],
         "rff_path_scale": [1.0],
         "gp_beta_mode": ["theorem"],
@@ -95,23 +129,46 @@ def build_sweep_configs(
         "episode_length": [50],
         "num_episodes": [5],
         "action_repeat": [2],
-        "num_offline_data": [num_offline_data],
-        "num_safe_offline_data": [num_safe_offline_data],
         "num_traj": [0],
         "max_position": [1.5],
         "use_optimism": [0],
         "use_pessimism": [1],
         "lambda_sigma": [0.0],
         "uncertainty_eps": [0.0],
+        "uncertainty_scale_with_beta": [1],
         "uncertainty_decay_factor": [10.0],
         "uncertainty_decay_mode": ["linear"],
         "uncertainty_constraint_threshold": [0.0],
         "action_cost": [0.0],
         "default_task_index": [0],
         "optimizer": ["icem"],
+        "num_evaluation_trajectories": [num_evaluation_trajectories],
+        "log_gp_diagnostics": [int(log_gp_diagnostics)],
         "log_wandb": [1],
     }
-    return dict_permutations(config)
+    configs = []
+    for base_config in dict_permutations(config):
+        for total_data in offline_data_sweep:
+            for safe_data in safe_offline_data_sweep:
+                if not 0 <= safe_data <= total_data:
+                    continue
+                for sampling_mode in sampling_modes:
+                    mode_config = SAMPLING_MODE_CONFIGS[sampling_mode]
+                    configs.append({
+                        **base_config,
+                        **mode_config,
+                        "num_offline_data": total_data,
+                        "num_safe_offline_data": safe_data,
+                        "gp_prior_condition_on_initial_data": int(
+                            total_data > 0
+                        ),
+                    })
+    if not configs:
+        raise ValueError(
+            "No valid D0 configurations: require "
+            "0 <= num_safe_offline_data <= num_offline_data."
+        )
+    return configs
 
 
 def main(args):
@@ -120,11 +177,16 @@ def main(args):
         seeds=args.seeds,
         num_rff_features=args.num_rff_features,
         function_norm=args.function_norm,
+        sampling_modes=getattr(args, "sampling_modes", ["prior"]),
         num_offline_data=args.num_offline_data,
         num_safe_offline_data=args.num_safe_offline_data,
         num_samples=args.num_samples,
         num_elites=args.num_elites,
         num_steps=args.num_steps,
+        num_evaluation_trajectories=getattr(
+            args, "num_evaluation_trajectories", 5
+        ),
+        log_gp_diagnostics=getattr(args, "log_gp_diagnostics", False),
         use_empirical_function_norms=args.use_empirical_function_norms,
         rkhs_norm_safety_factor=args.rkhs_norm_safety_factor,
         confidence_delta=args.confidence_delta,
@@ -174,11 +236,39 @@ if __name__ == "__main__":
     parser.add_argument("--num_samples", type=int, default=1_000)
     parser.add_argument("--num_elites", type=int, default=100)
     parser.add_argument("--num_steps", type=int, default=5)
-    parser.add_argument("--num_offline_data", type=int, default=18)
+    parser.add_argument(
+        "--num_evaluation_trajectories",
+        type=int,
+        default=5,
+    )
+    parser.add_argument(
+        "--log_gp_diagnostics",
+        action="store_true",
+        help="Enable expensive visited-path clipping/calibration diagnostics.",
+    )
+    parser.add_argument(
+        "--sampling_modes",
+        choices=list(SAMPLING_MODE_CONFIGS),
+        nargs="+",
+        default=["prior"],
+        help=(
+            "prior: one fixed recursively truncated path bank; posterior: "
+            "new fixed posterior paths per episode recursively clipped to all "
+            "confidence tubes; ts1: stepwise marginal posterior sampling with "
+            "the same recursive clipping."
+        ),
+    )
+    parser.add_argument(
+        "--num_offline_data",
+        type=int,
+        nargs="+",
+        default=[18],
+    )
     parser.add_argument(
         "--num_safe_offline_data",
         type=int,
-        default=1,
+        nargs="+",
+        default=[1],
         help=(
             "D0 points assigned to the local safe-equilibrium design; the "
             "remaining points stay uniformly random."
@@ -208,6 +298,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--wandb_notes",
         type=str,
-        default="theory-aligned-D0-prior-hard-recovery-zero-tightening",
+        default="theory-sampling-M-sweep-D0-hard-recovery-zero-tightening",
     )
     main(parser.parse_args())

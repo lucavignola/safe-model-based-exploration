@@ -48,6 +48,7 @@ def experiment(
         uncertainty_decay_factor: float = 10.0,
         uncertainty_decay_mode: str = 'linear',
         uncertainty_constraint_threshold: float = 10.0,
+        uncertainty_scale_with_beta: bool = False,
         default_task_index: int = 0,
         actsafe_index: int = -1,
         wandb_notes: str = None,
@@ -63,9 +64,11 @@ def experiment(
         confidence_delta: float = 0.05,
         information_gain_bound: str = 'diagonal',
         rkhs_norm_safety_factor: float = 1.0,
+        num_evaluation_trajectories: int = 1,
+        log_gp_diagnostics: bool = False,
 ):
     if rff_path_scale is None:
-        rff_path_scale = 1.0 if gp_path_source == 'prior' else beta
+        rff_path_scale = 1.0
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
@@ -128,6 +131,7 @@ def experiment(
         uncertainty_decay_factor=uncertainty_decay_factor,
         uncertainty_decay_mode=uncertainty_decay_mode,
         uncertainty_constraint_threshold=uncertainty_constraint_threshold,
+        uncertainty_scale_with_beta=uncertainty_scale_with_beta,
         default_task_index=default_task_index,
         actsafe_index=actsafe_index,
         gp_sampling_method=gp_sampling_method,
@@ -143,6 +147,8 @@ def experiment(
         confidence_delta=confidence_delta,
         information_gain_bound=information_gain_bound,
         rkhs_norm_safety_factor=rkhs_norm_safety_factor,
+        num_evaluation_trajectories=num_evaluation_trajectories,
+        log_gp_diagnostics=log_gp_diagnostics,
         wandb_notes=wandb_notes  # Add to config for visibility
     )
     import jax
@@ -424,6 +430,8 @@ def experiment(
             gp_prior_condition_on_initial_data,
         'gp_path_source': gp_path_source,
         'constraint_failure_mode': constraint_failure_mode,
+        'num_evaluation_trajectories': num_evaluation_trajectories,
+        'log_gp_diagnostics': log_gp_diagnostics,
     }
 
     # Add SBSRL-specific parameters if needed
@@ -435,6 +443,7 @@ def experiment(
             'uncertainty_decay_factor': uncertainty_decay_factor,
             'uncertainty_decay_mode': uncertainty_decay_mode,
             'uncertainty_constraint_threshold': uncertainty_constraint_threshold,
+            'uncertainty_scale_with_beta': uncertainty_scale_with_beta,
             'default_task_index': default_task_index,
         })
     elif alg_name == 'ActSafe':
@@ -558,6 +567,9 @@ def main(args):
         uncertainty_decay_factor=args.uncertainty_decay_factor,
         uncertainty_decay_mode=args.uncertainty_decay_mode,
         uncertainty_constraint_threshold=args.uncertainty_constraint_threshold,
+        uncertainty_scale_with_beta=bool(
+            args.uncertainty_scale_with_beta
+        ),
         default_task_index=args.default_task_index,
         actsafe_index=args.actsafe_index,
         wandb_notes=args.wandb_notes,
@@ -577,6 +589,8 @@ def main(args):
         confidence_delta=args.confidence_delta,
         information_gain_bound=args.information_gain_bound,
         rkhs_norm_safety_factor=args.rkhs_norm_safety_factor,
+        num_evaluation_trajectories=args.num_evaluation_trajectories,
+        log_gp_diagnostics=bool(args.log_gp_diagnostics),
     )
 
 
@@ -659,6 +673,13 @@ if __name__ == '__main__':
     parser.add_argument('--uncertainty_decay_factor', type=float, default=10.0)
     parser.add_argument('--uncertainty_decay_mode', type=str, default='linear', choices=['linear', 'log_sigma_eps'])
     parser.add_argument('--uncertainty_constraint_threshold', type=float, default=50.0)
+    parser.add_argument(
+        '--uncertainty_scale_with_beta',
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help='Use d_sigma^n = scheduled_d_sigma^n / max_j beta_n,j.',
+    )
     parser.add_argument('--default_task_index', type=int, default=0)
     parser.add_argument('--actsafe_index', type=int, default=-1)
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
@@ -669,7 +690,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_rff_features', type=int, default=512,
                         help='Number of spectral frequencies per GP output in RFF mode')
     parser.add_argument('--rff_path_scale', type=float, default=None,
-                        help='Scale of RFF posterior residuals (defaults to --beta; 1 is an uninflated approximate posterior path)')
+                        help='Scale of RFF posterior residuals (defaults to 1, an uninflated approximate posterior path)')
     parser.add_argument(
         '--gp_sample_truncation',
         type=str,
@@ -736,6 +757,19 @@ if __name__ == '__main__':
             'Multiplier on the explicit/finite-design B value; finite-design '
             'estimates remain non-certified for every finite multiplier.'
         ),
+    )
+    parser.add_argument(
+        '--num_evaluation_trajectories',
+        type=int,
+        default=1,
+        help='Number of independent true-environment rollouts per task evaluation.',
+    )
+    parser.add_argument(
+        '--log_gp_diagnostics',
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help='Compute the comparatively expensive visited-path GP diagnostics.',
     )
 
     parser.add_argument('--seed', type=int, default=0)

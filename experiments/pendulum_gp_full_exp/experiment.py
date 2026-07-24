@@ -13,6 +13,7 @@ def experiment(
         entity_name: str = 'lvignola-eth-z-rich',
         exp_hash: str = '42',
         num_offline_data: int = 100,
+        num_safe_offline_data: int = 0,
         seed: int = 0,
         num_particles: int = 10,
         num_samples: int = 500,
@@ -47,6 +48,7 @@ def experiment(
         uncertainty_decay_factor: float = 10.0,
         uncertainty_decay_mode: str = 'linear',
         uncertainty_constraint_threshold: float = 50.0,
+        uncertainty_scale_with_beta: bool = False,
         default_task_index: int = 0,
         actsafe_index: int = -1,
         wandb_notes: str = None,
@@ -61,13 +63,16 @@ def experiment(
         confidence_delta: float = 0.05,
         information_gain_bound: str = 'diagonal',
         rkhs_norm_safety_factor: float = 1.0,
+        num_evaluation_trajectories: int = 1,
+        log_gp_diagnostics: bool = False,
 ):
     if rff_path_scale is None:
-        rff_path_scale = 1.0 if gp_path_source == 'prior' else beta
+        rff_path_scale = 1.0
     if num_gpus == 0:
         import os
         os.environ['JAX_PLATFORMS'] = 'cpu'
 
+    import jax
     import jax.random as jr
     import jax.numpy as jnp
     import chex
@@ -88,6 +93,7 @@ def experiment(
     from smbrl.dynamics_models.gp_confidence import TheoremGPStatisticalModel
 
     from mbrl.utils.offline_data import OfflineData
+    from brax.envs import State
 
     env = PendulumEnv()
 
@@ -116,18 +122,103 @@ def experiment(
             actions = jr.uniform(key, shape=(num_samples, 1), minval=-1, maxval=1)
             return actions
 
+    class PendulumSafeOfflineData(PendulumOfflineData):
+        """Local design around the known safe downward equilibrium."""
+
+        def _sample_states(self, key, num_samples):
+            key_angle, key_velocity = jr.split(key)
+            angles = jnp.pi + jr.uniform(
+                key_angle,
+                shape=(num_samples,),
+                minval=-0.05,
+                maxval=0.05,
+            )
+            velocities = jr.uniform(
+                key_velocity,
+                shape=(num_samples,),
+                minval=-0.1,
+                maxval=0.1,
+            )
+            return jnp.stack(
+                [jnp.cos(angles), jnp.sin(angles), velocities],
+                axis=-1,
+            )
+
+        def _sample_actions(self, key, num_samples):
+            return jr.uniform(
+                key,
+                shape=(num_samples, 1),
+                minval=-0.05,
+                maxval=0.05,
+            )
+
+    if not 0 <= num_safe_offline_data <= num_offline_data:
+        raise ValueError(
+            "num_safe_offline_data must lie in [0, num_offline_data]; "
+            f"got {num_safe_offline_data} and {num_offline_data}."
+        )
+
+    def sample_repeated_data(generator, data_key, num_samples, *, safe):
+        """Samples D0 transitions at the same action-repeat as online data."""
+
+        state_key, action_key = jr.split(data_key)
+        states = generator.sample_states(state_key, num_samples)
+        actions = generator.sample_actions(action_key, num_samples)
+        if safe and num_samples > 0:
+            states = states.at[0].set(jnp.array([-1.0, 0.0, 0.0]))
+            actions = actions.at[0].set(jnp.zeros((env.action_size,)))
+        brax_state = State(
+            pipeline_state=jnp.zeros((num_samples,)),
+            obs=states,
+            reward=jnp.zeros((num_samples,)),
+            done=jnp.zeros((num_samples,)),
+        )
+        for _ in range(action_repeat):
+            brax_state = jax.vmap(env.step)(brax_state, actions)
+        return Data(
+            inputs=jnp.concatenate([states, actions], axis=-1),
+            outputs=brax_state.obs - states,
+        )
+
     if num_offline_data > 0:
-        offline_data_gen = PendulumOfflineData(env=env, max_velocity=max_abs_velocity)
-        transitions = offline_data_gen.sample_transitions(key=offline_data_key,
-                                                          num_samples=num_offline_data)
-        offline_data = Data(inputs=jnp.concatenate([transitions.observation, transitions.action], axis=-1),
-                            outputs=transitions.next_observation - transitions.observation, )
+        random_key, safe_key = jr.split(offline_data_key)
+        num_random_offline_data = (
+            num_offline_data - num_safe_offline_data
+        )
+        data_parts = []
+        if num_random_offline_data:
+            data_parts.append(sample_repeated_data(
+                PendulumOfflineData(
+                    env=env, max_velocity=max_abs_velocity
+                ),
+                random_key,
+                num_random_offline_data,
+                safe=False,
+            ))
+        if num_safe_offline_data:
+            data_parts.append(sample_repeated_data(
+                PendulumSafeOfflineData(
+                    env=env, max_velocity=max_abs_velocity
+                ),
+                safe_key,
+                num_safe_offline_data,
+                safe=True,
+            ))
+        offline_data = Data(
+            inputs=jnp.concatenate(
+                [data_part.inputs for data_part in data_parts]
+            ),
+            outputs=jnp.concatenate(
+                [data_part.outputs for data_part in data_parts]
+            ),
+        )
     else:
         offline_data = None
 
     configs = dict(
         alg_name=alg_name,
         num_offline_data=num_offline_data,
+        num_safe_offline_data=num_safe_offline_data,
         seed=seed,
         num_particles=num_particles,
         num_samples=num_samples,
@@ -160,6 +251,7 @@ def experiment(
         uncertainty_decay_factor=uncertainty_decay_factor,
         uncertainty_decay_mode=uncertainty_decay_mode,
         uncertainty_constraint_threshold=uncertainty_constraint_threshold,
+        uncertainty_scale_with_beta=uncertainty_scale_with_beta,
         default_task_index=default_task_index,
         actsafe_index=actsafe_index,
         gp_sampling_method=gp_sampling_method,
@@ -175,6 +267,8 @@ def experiment(
         confidence_delta=confidence_delta,
         information_gain_bound=information_gain_bound,
         rkhs_norm_safety_factor=rkhs_norm_safety_factor,
+        num_evaluation_trajectories=num_evaluation_trajectories,
+        log_gp_diagnostics=log_gp_diagnostics,
         wandb_notes=wandb_notes  # Add to config for visibility
     )
 
@@ -345,6 +439,8 @@ def experiment(
             gp_prior_condition_on_initial_data,
         'gp_path_source': gp_path_source,
         'constraint_failure_mode': constraint_failure_mode,
+        'num_evaluation_trajectories': num_evaluation_trajectories,
+        'log_gp_diagnostics': log_gp_diagnostics,
     }
 
     # Add SBSRL-specific parameters if needed
@@ -356,6 +452,7 @@ def experiment(
             'uncertainty_decay_factor': uncertainty_decay_factor,
             'uncertainty_decay_mode': uncertainty_decay_mode,
             'uncertainty_constraint_threshold': uncertainty_constraint_threshold,
+            'uncertainty_scale_with_beta': uncertainty_scale_with_beta,
             'default_task_index': default_task_index,
         })
     elif alg_name == 'ActSafe':
@@ -449,6 +546,7 @@ def main(args):
         alg_name=args.alg_name,
         action_repeat=args.action_repeat,
         num_offline_data=args.num_offline_data,
+        num_safe_offline_data=args.num_safe_offline_data,
         num_particles=args.num_particles,
         num_samples=args.num_samples,
         alpha=args.alpha,
@@ -483,6 +581,9 @@ def main(args):
         uncertainty_decay_factor=args.uncertainty_decay_factor,
         uncertainty_decay_mode=args.uncertainty_decay_mode,
         uncertainty_constraint_threshold=args.uncertainty_constraint_threshold,
+        uncertainty_scale_with_beta=bool(
+            args.uncertainty_scale_with_beta
+        ),
         default_task_index=args.default_task_index,
         actsafe_index=args.actsafe_index,
         gp_sampling_method=args.gp_sampling_method,
@@ -500,6 +601,8 @@ def main(args):
         confidence_delta=args.confidence_delta,
         information_gain_bound=args.information_gain_bound,
         rkhs_norm_safety_factor=args.rkhs_norm_safety_factor,
+        num_evaluation_trajectories=args.num_evaluation_trajectories,
+        log_gp_diagnostics=bool(args.log_gp_diagnostics),
         wandb_notes=args.wandb_notes,
     )
 
@@ -513,6 +616,15 @@ if __name__ == '__main__':
     parser.add_argument('--alg_name', type=str, default='ActSafe')
     parser.add_argument('--entity_name', type=str, default='lvignola-eth-z-rich')
     parser.add_argument('--num_offline_data', type=int, default=100)
+    parser.add_argument(
+        '--num_safe_offline_data',
+        type=int,
+        default=0,
+        help=(
+            'Number of D0 points drawn near the safe downward equilibrium, '
+            'including one exact equilibrium transition.'
+        ),
+    )
     parser.add_argument('--num_particles', type=int, default=10)
     parser.add_argument('--num_samples', type=int, default=500)
     parser.add_argument('--alpha', type=float, default=0.2)
@@ -573,6 +685,13 @@ if __name__ == '__main__':
     parser.add_argument('--uncertainty_decay_factor', type=float, default=10.0, help='Divide SBSRL uncertainty threshold by this factor each episode')
     parser.add_argument('--uncertainty_decay_mode', type=str, default='linear', choices=['linear', 'log_sigma_eps'], help='How SBSRL eps_sigma decays over episodes')
     parser.add_argument('--uncertainty_constraint_threshold', type=float, default=50.0, help='Disable SBSRL uncertainty constraint when mean relu(eps-intrinsic) exceeds this threshold')
+    parser.add_argument(
+        '--uncertainty_scale_with_beta',
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help='Use d_sigma^n = scheduled_d_sigma^n / max_j beta_n,j.',
+    )
     parser.add_argument('--default_task_index', type=int, default=0, help='Which task reward to use as extrinsic component in SBSRL')
     parser.add_argument('--actsafe_index', type=int, default=-1, help='Episode index from which ActSafe switches to task-reward exploitation (-1 disables)')
     parser.add_argument('--wandb_notes', type=str, default=None, help='Notes for wandb run grouping')
@@ -582,7 +701,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_rff_features', type=int, default=512,
                         help='Number of spectral frequencies per GP output in RFF mode')
     parser.add_argument('--rff_path_scale', type=float, default=None,
-                        help='Scale of RFF posterior residuals (defaults to --beta; 1 is an uninflated approximate posterior path)')
+                        help='Scale of RFF posterior residuals (defaults to 1, an uninflated approximate posterior path)')
     parser.add_argument(
         '--gp_sample_truncation',
         type=str,
@@ -646,6 +765,19 @@ if __name__ == '__main__':
         type=float,
         default=1.0,
         help='Multiplier on the explicitly assumed Pendulum RKHS bound B.',
+    )
+    parser.add_argument(
+        '--num_evaluation_trajectories',
+        type=int,
+        default=1,
+        help='Number of independent true-environment rollouts per task evaluation.',
+    )
+    parser.add_argument(
+        '--log_gp_diagnostics',
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help='Compute the comparatively expensive visited-path GP diagnostics.',
     )
 
     parser.add_argument('--seed', type=int, default=0)
