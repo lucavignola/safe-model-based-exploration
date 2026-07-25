@@ -119,11 +119,11 @@ def main(args):
         num_cpus=hardware["cpus_per_task"],
         num_gpus=1,
         mode=args.mode,
-        duration="4:00:00",
+        duration=getattr(args, "duration", "4:00:00"),
         prompt=not args.dry_run,
         dry=args.dry_run,
         gpu_type=hardware["gpu_type"],
-        partition=None,
+        partition=getattr(args, "partition", None),
     )
 
 
@@ -132,6 +132,19 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=["euler", "local", "local_async"], default="euler")
     parser.add_argument("--hardware", choices=list(HARDWARE_CONFIGS), default="4090_rtx")
     parser.add_argument("--dry_run", action="store_true")
+    parser.add_argument(
+        "--duration",
+        default="4:00:00",
+        help="Slurm wall time, for example 24:00:00.",
+    )
+    parser.add_argument(
+        "--partition",
+        default=None,
+        help=(
+            "Optional explicit Slurm partition, for example gpuhe.24h. "
+            "If omitted, Slurm selects the partition."
+        ),
+    )
     parser.add_argument("--gp_sampling_method", choices=["marginal", "rff", "both"], default="both")
     parser.add_argument(
         "--gp_sample_truncation",

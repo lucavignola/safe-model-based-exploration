@@ -209,11 +209,11 @@ def main(args):
         num_cpus=hardware["cpus_per_task"],
         num_gpus=1,
         mode=args.mode,
-        duration="4:00:00",
+        duration=getattr(args, "duration", "4:00:00"),
         prompt=not args.dry_run,
         dry=args.dry_run,
         gpu_type=hardware["gpu_type"],
-        partition=None,
+        partition=getattr(args, "partition", None),
     )
 
 
@@ -230,6 +230,19 @@ if __name__ == "__main__":
         default="4090_rtx",
     )
     parser.add_argument("--dry_run", action="store_true")
+    parser.add_argument(
+        "--duration",
+        default="4:00:00",
+        help="Slurm wall time, for example 24:00:00.",
+    )
+    parser.add_argument(
+        "--partition",
+        default=None,
+        help=(
+            "Optional explicit Slurm partition, for example gpuhe.24h. "
+            "If omitted, Slurm selects the partition."
+        ),
+    )
     parser.add_argument("--particles", type=int, nargs="+", default=PARTICLE_SWEEP)
     parser.add_argument("--seeds", type=int, nargs="+", default=list(range(5)))
     parser.add_argument("--num_rff_features", type=int, default=512)

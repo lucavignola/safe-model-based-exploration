@@ -1,159 +1,216 @@
-import experiment
-from smbrl.utils.experiment_utils import generate_run_commands, generate_base_command, dict_permutations
+"""Euler launcher for Pendulum ActSafe sweeps."""
+
 import argparse
+from pathlib import Path
+import sys
 
-PROJECT_NAME = 'PendulumGP'
-ENTITY = 'lvignola-eth-z-rich'
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+import experiment
+
+from smbrl.utils.experiment_utils import (
+    dict_permutations,
+    generate_base_command,
+    generate_run_commands,
+)
+
+
+PROJECT_NAME = "PendulumGP"
+ENTITY_NAME = "lvignola-eth-z-rich"
 NUM_GPUS = 1
+DEFAULT_PARTICLES = [30]
 
-# Hardware configurations matching working Hydra setup
 HARDWARE_CONFIGS = {
-    '4090_rtx': {
-        'gpu_type': 'rtx_4090',
-        'cpus_per_task': 10,
-        'timeout_min': 180  # Increased from 60 to 180 min (3h)
+    "4090_rtx": {
+        "gpu_type": "rtx_4090",
+        "cpus_per_task": 10,
+        "timeout_min": 240,
     },
-    'rtx_a6000': {
-        'gpu_type': 'rtxa6000',
-        'cpus_per_task': 8,
-        'timeout_min': 180  # Increased from 120 to 180 min for consistency
+    "rtx_a6000": {
+        "gpu_type": "rtxa6000",
+        "cpus_per_task": 8,
+        "timeout_min": 240,
     },
-    'cpu_only': {
-        'gpu_type': None,
-        'cpus_per_task': 4,
-        'timeout_min': 300  # Increased from 240 to 300 min (5h)
+    "cpu_only": {
+        "gpu_type": None,
+        "cpus_per_task": 4,
+        "timeout_min": 300,
+    },
+}
+
+
+def build_sweep_configs(
+    *,
+    particles=DEFAULT_PARTICLES,
+    seeds=range(5),
+    num_offline_data=0,
+    num_safe_offline_data=0,
+    match_theory_config=False,
+):
+    """Build an ActSafe-only sweep, optionally matching the SBSRL setup."""
+
+    if not 0 <= num_safe_offline_data <= num_offline_data:
+        raise ValueError(
+            "Require 0 <= num_safe_offline_data <= num_offline_data."
+        )
+
+    config = {
+        "alg_name": ["ActSafe"],
+        "project_name": [PROJECT_NAME],
+        "entity_name": [ENTITY_NAME],
+        "seed": list(seeds),
+        "num_particles": list(particles),
+        "use_optimism": [1],
+        "use_pessimism": [1],
+        "actsafe_index": [-1],
+        "env_margin_factor": [10.0],
+        "reward_source": ["gym"],
+        "num_training_steps": [1_000],
+        "num_gpus": [NUM_GPUS],
+        "num_samples": [1_000],
+        "lambda_constraint": [1e7],
+        "icem_horizon": [20],
+        "num_elites": [100],
+        "num_offline_data": [num_offline_data],
+        "num_safe_offline_data": [num_safe_offline_data],
+        "violation_eps": [0.0],
+        "gp_sample_truncation": ["none"],
+        "beta": [3.0],
+        "log_wandb": [1],
     }
-}
 
-_applicable_configs = {
-    'env_margin_factor': [10],
-    'reward_source': ['gym'],
-    'project_name': [PROJECT_NAME],
-    'num_training_steps': [1_000],
-    'seed': list(range(5)),
-    'entity': [ENTITY],
-    'num_gpus': [NUM_GPUS],
-    'num_samples': [1_000],
-    'lambda_constraint': [1e7],
-    'icem_horizon': [20],
-    'num_elites': [100],
-    'num_offline_data': [0],
-    'violation_eps': [0,0.5],
-    'gp_sample_truncation': ['none'],
-    'log_wandb': [1],
-}
+    if match_theory_config:
+        # Match theory_sweep_launcher.py in every common environment, GP,
+        # iCEM, D0 and evaluation setting. ActSafe's exploration objective and
+        # optimism/pessimism choices remain the algorithmic differences.
+        config.update({
+            "project_name": ["PendulumGPTheoryAligned"],
+            "num_training_steps": [0],
+            "num_episodes": [10],
+            "episode_length": [50],
+            "action_repeat": [2],
+            "max_abs_velocity": [6.0],
+            "num_evaluation_trajectories": [5],
+            "function_norm": [1.0],
+            "gp_beta_mode": ["theorem"],
+            "confidence_delta": [0.05],
+            "information_gain_bound": ["diagonal"],
+            "aleatoric_noise_in_prediction": [0],
+            "constraint_mode": ["hard"],
+            "constraint_tolerance": [1e-6],
+            "constraint_failure_mode": ["recovery"],
+            "reward_dynamics_source": ["posterior_mean"],
+            "lambda_constraint": [0.0],
+            "violation_eps": [0.0],
+            "gp_sampling_method": ["marginal"],
+            "gp_path_source": ["posterior"],
+            "gp_sample_truncation": ["recursive"],
+            "gp_prior_condition_on_initial_data": [
+                int(num_offline_data > 0)
+            ],
+            "alpha": [0.2],
+            "exponent": [0.2],
+            "num_steps": [5],
+            "rff_path_scale": [1.0],
+        })
 
-num_particles = [30]
-_applicable_configs_actsafe = {'alg_name': ['ActSafe'], 'use_optimism': [1], 'use_pessimism': [1],
-                               'num_particles': num_particles,
-                               'beta': [3.0],
-                               'actsafe_index': [-1],
-                               } \
-                              | _applicable_configs
-
-_applicable_configs_opax = {'alg_name': ['OPAX'], 'use_optimism': [1], 'use_pessimism': [1],
-                            'num_particles': num_particles,
-                            'beta': [3.0],
-                            } \
-                           | _applicable_configs
-
-_applicable_configs_sbsrl = {'alg_name': ['SBSRL'], 'use_optimism': [1], 'use_pessimism': [1],
-                             'num_particles': num_particles,
-                             'beta': [3.0],
-                             'lambda_sigma': [0,100,10000],
-                             'action_cost': [0.0, 0.01],
-                             'uncertainty_eps': [300,600,1000],
-                             'uncertainty_decay_factor': [10.0],
-                             'uncertainty_decay_mode': ['linear', 'log_sigma_eps'],
-                             'uncertainty_constraint_threshold': [10.0],
-                             'default_task_index': [0],
-                             } \
-                            | _applicable_configs
-
-# _applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0],
-#                                             'num_particles': [1],
-#                                             'beta': [3.0],
-#                                             } \
-#                                            | _applicable_configs
-
-# _applicable_configs_actsafe_no_optimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [1]} \
-#                                           | _applicable_configs
-#
-#_applicable_configs_actsafe_no_pessimism = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0]} \
-#                                            | _applicable_configs
-#
-_applicable_configs_safehucrl = {'alg_name': ['SafeHUCRL'], 'use_optimism': [1], 'use_pessimism': [1],
-                                 'num_particles': num_particles,
-                                 'beta': [3.0],
-                                 } \
-                                | _applicable_configs
-
-_applicable_configs_hucrl = {'alg_name': ['HUCRL'], 'use_optimism': [1], 'use_pessimism': [1],
-                             'num_particles': num_particles,
-                             'beta': [3.0],
-                             } \
-                            | _applicable_configs
-
-_applicable_configs_actsafe_mean = {'alg_name': ['ActSafe'], 'use_optimism': [0], 'use_pessimism': [0],
-                                    'num_particles': [1],
-                                    'beta': [0.0],
-                                    } \
-                                   | _applicable_configs
-
-all_flags_combinations = dict_permutations(_applicable_configs_sbsrl) #dict_permutations(_applicable_configs_actsafe) \
-#+ dict_permutations(_applicable_configs_actsafe_mean) \
-#+ dict_permutations(_applicable_configs_safehucrl) \
-#+ dict_permutations(_applicable_configs_sbsrl)
-#+ dict_permutations(_applicable_configs_opax) \
- #+ dict_permutations(_applicable_configs_hucrl)
-
-
-
-# all_flags_combinations = dict_permutations(_applicable_configs_actsafe) \
-#                          + dict_permutations(_applicable_configs_actsafe_no_optimism) \
-#                          + dict_permutations(_applicable_configs_actsafe_no_pessimism) \
-#                          + dict_permutations(_applicable_configs_safehucrl)
+    return dict_permutations(config)
 
 
 def main(args):
-    command_list = []
-    logs_dir = '../'
-    if args.mode == 'euler':
-        logs_dir = '/cluster/scratch/'
-        logs_dir += 'lvignola' + '/' + PROJECT_NAME + '/'
+    configs = build_sweep_configs(
+        particles=args.particles,
+        seeds=args.seeds,
+        num_offline_data=args.num_offline_data,
+        num_safe_offline_data=args.num_safe_offline_data,
+        match_theory_config=args.match_theory_config,
+    )
 
-    for flags in all_flags_combinations:
-        flags['logs_dir'] = logs_dir
-        # Add wandb notes if specified
+    commands = []
+    for flags in configs:
+        logs_dir = "../"
+        if args.mode == "euler":
+            logs_dir = (
+                f"/cluster/scratch/lvignola/"
+                f"{flags['project_name']}/"
+            )
+        flags["logs_dir"] = logs_dir
         if args.wandb_notes:
-            flags['wandb_notes'] = args.wandb_notes
-        cmd = generate_base_command(experiment, flags=flags)
-        command_list.append(cmd)
+            flags["wandb_notes"] = args.wandb_notes
+        command = generate_base_command(experiment, flags=flags)
+        commands.append(f"PYTHONPATH={REPO_ROOT} {command}")
 
-    # submit jobs - using exact working Hydra configuration
-    hw_config = HARDWARE_CONFIGS.get(args.hardware, HARDWARE_CONFIGS['4090_rtx'])
-    duration_hours = hw_config['timeout_min'] // 60 if not args.long_run else 23
-    duration_mins = hw_config['timeout_min'] % 60 if not args.long_run else 59
+    hardware = HARDWARE_CONFIGS[args.hardware]
+    if args.duration is not None:
+        duration = args.duration
+    elif args.long_run:
+        duration = "24:00:00"
+    else:
+        hours, minutes = divmod(hardware["timeout_min"], 60)
+        duration = f"{hours}:{minutes:02d}:00"
 
-    generate_run_commands(command_list,
-                          num_cpus=hw_config['cpus_per_task'],
-                          num_gpus=NUM_GPUS if hw_config['gpu_type'] is not None else 0,
-                          mode=args.mode,
-                          duration=f'{duration_hours}:{duration_mins:02d}:00',
-                          prompt=True,
-                          gpu_type=hw_config['gpu_type']
-                          )
+    generate_run_commands(
+        commands,
+        num_cpus=hardware["cpus_per_task"],
+        num_gpus=NUM_GPUS if hardware["gpu_type"] is not None else 0,
+        mode=args.mode,
+        duration=duration,
+        prompt=not args.dry_run,
+        dry=args.dry_run,
+        gpu_type=hardware["gpu_type"],
+        partition=args.partition,
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', type=str, default='euler', help='how to launch the experiments')
-    parser.add_argument('--long_run', default=False, action="store_true")
-    parser.add_argument('--hardware', type=str, default='4090_rtx',
-                       choices=['4090_rtx', 'rtx_a6000', 'cpu_only'],
-                       help='hardware configuration (similar to Hydra +hardware=4090_rtx)')
-    parser.add_argument('--wandb_notes', type=str, default=None,
-                       help='wandb notes for grouping runs (e.g. Mar01-pendulum_sbsrl)')
-
-    args = parser.parse_args()
-    main(args)
+    parser.add_argument(
+        "--mode",
+        choices=["euler", "local", "local_async"],
+        default="euler",
+    )
+    parser.add_argument(
+        "--hardware",
+        choices=list(HARDWARE_CONFIGS),
+        default="4090_rtx",
+    )
+    parser.add_argument("--dry_run", action="store_true")
+    parser.add_argument("--long_run", action="store_true")
+    parser.add_argument(
+        "--duration",
+        default=None,
+        help=(
+            "Explicit Slurm wall time, for example 24:00:00. Overrides "
+            "--long_run and the hardware default."
+        ),
+    )
+    parser.add_argument(
+        "--partition",
+        default="gpuhe.24h",
+        help="Explicit Slurm partition.",
+    )
+    parser.add_argument(
+        "--particles", type=int, nargs="+", default=DEFAULT_PARTICLES,
+    )
+    parser.add_argument(
+        "--seeds", type=int, nargs="+", default=list(range(5)),
+    )
+    parser.add_argument("--num_offline_data", type=int, default=0)
+    parser.add_argument("--num_safe_offline_data", type=int, default=0)
+    parser.add_argument(
+        "--match_theory_config",
+        action="store_true",
+        help=(
+            "Match the common D0, GP, iCEM, hard-constraint and five-trajectory "
+            "evaluation settings used by theory_sweep_launcher.py."
+        ),
+    )
+    parser.add_argument(
+        "--wandb_notes",
+        default=None,
+        help="W&B note/tag used to group the sweep.",
+    )
+    main(parser.parse_args())
