@@ -77,7 +77,6 @@ def build_sweep_configs(
         "num_offline_data": [num_offline_data],
         "num_safe_offline_data": [num_safe_offline_data],
         "violation_eps": [0.0],
-        "gp_sample_truncation": ["none"],
         "beta": [3.0],
         "log_wandb": [1],
     }
@@ -106,15 +105,9 @@ def build_sweep_configs(
             "lambda_constraint": [0.0],
             "violation_eps": [0.0],
             "gp_sampling_method": ["marginal"],
-            "gp_path_source": ["posterior"],
-            "gp_sample_truncation": ["recursive"],
-            "gp_prior_condition_on_initial_data": [
-                int(num_offline_data > 0)
-            ],
             "alpha": [0.2],
             "exponent": [0.2],
             "num_steps": [5],
-            "rff_path_scale": [1.0],
         })
 
     return dict_permutations(config)

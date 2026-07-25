@@ -60,7 +60,6 @@ _applicable_configs = {
     "num_steps": [5],
     "violation_eps":  [0.6],
     "num_traj": [0],  # 0=uniform grid sampling, >0=trajectory-based sampling
-    "gp_sample_truncation": ["none"],
 }
 num_particles = [30]
 _applicable_configs_actsafe = {
@@ -137,8 +136,6 @@ def main(args):
                 "reward_dynamics_source": "posterior_mean",
                 "violation_eps": 0.0,
                 "gp_sampling_method": "marginal",
-                "gp_path_source": "posterior",
-                "gp_sample_truncation": "recursive",
             })
         logs_dir = "../"
         if args.mode == "euler":
