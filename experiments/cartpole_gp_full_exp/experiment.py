@@ -59,6 +59,7 @@ def experiment(
         gp_sample_truncation: str = 'none',
         aleatoric_noise_in_prediction: bool = True,
         gp_prior_condition_on_initial_data: bool = False,
+        gp_hyperparameter_update: str = 'model_default',
         gp_path_source: str = 'posterior',
         gp_beta_mode: str = 'fixed',
         confidence_delta: float = 0.05,
@@ -142,6 +143,7 @@ def experiment(
         gp_prior_condition_on_initial_data=(
             gp_prior_condition_on_initial_data
         ),
+        gp_hyperparameter_update=gp_hyperparameter_update,
         gp_path_source=gp_path_source,
         gp_beta_mode=gp_beta_mode,
         confidence_delta=confidence_delta,
@@ -150,6 +152,9 @@ def experiment(
         num_evaluation_trajectories=num_evaluation_trajectories,
         log_gp_diagnostics=log_gp_diagnostics,
         wandb_notes=wandb_notes  # Add to config for visibility
+    )
+    configs['kernel_lifecycle_theory_aligned'] = (
+        gp_hyperparameter_update != 'every_episode'
     )
     import jax
     jax.config.update("jax_enable_x64", True)
@@ -244,18 +249,15 @@ def experiment(
 
     env = CartPoleEnv()
 
-    if use_precomputed_kernel_params:
+    if (
+            use_precomputed_kernel_params
+            and gp_hyperparameter_update == 'model_default'
+    ):
         num_training_steps = constant_schedule(0)
     else:
         num_training_steps = constant_schedule(num_training_steps)
 
     if gp_beta_mode == 'theorem':
-        if not use_precomputed_kernel_params:
-            raise ValueError(
-                "Cartpole theorem beta mode requires "
-                "--use_precomputed_kernel_params=1 so the kernel and "
-                "normalization defining B remain fixed."
-            )
         if use_function_norms:
             # These values are finite-design simulator estimates, not
             # certified continuous-domain RKHS upper bounds.  The theorem
@@ -428,6 +430,7 @@ def experiment(
         'aleatoric_noise_in_prediction': aleatoric_noise_in_prediction,
         'gp_prior_condition_on_initial_data':
             gp_prior_condition_on_initial_data,
+        'gp_hyperparameter_update': gp_hyperparameter_update,
         'gp_path_source': gp_path_source,
         'constraint_failure_mode': constraint_failure_mode,
         'num_evaluation_trajectories': num_evaluation_trajectories,
@@ -584,6 +587,7 @@ def main(args):
         gp_prior_condition_on_initial_data=bool(
             args.gp_prior_condition_on_initial_data
         ),
+        gp_hyperparameter_update=args.gp_hyperparameter_update,
         gp_path_source=args.gp_path_source,
         gp_beta_mode=args.gp_beta_mode,
         confidence_delta=args.confidence_delta,
@@ -720,6 +724,17 @@ if __name__ == '__main__':
         help=(
             'Sample whole-run prior paths after conditioning on D0 (1), '
             'or from the unconditioned GP prior (0).'
+        ),
+    )
+    parser.add_argument(
+        '--gp_hyperparameter_update',
+        choices=['model_default', 'freeze_after_d0', 'every_episode'],
+        default='model_default',
+        help=(
+            'model_default preserves the model construction; '
+            'freeze_after_d0 fits on D0 once and then freezes; '
+            'every_episode optimizes GP hyperparameters after every data '
+            'update while keeping any sampled RFF paths fixed.'
         ),
     )
     parser.add_argument(

@@ -130,10 +130,11 @@ def main(args):
                 "confidence_delta": 0.05,
                 "information_gain_bound": "diagonal",
                 "aleatoric_noise_in_prediction": 0,
-                "constraint_mode": "hard",
+                "constraint_mode": "penalty",
                 "constraint_tolerance": 1e-6,
                 "constraint_failure_mode": "recovery",
-                "reward_dynamics_source": "posterior_mean",
+                "reward_dynamics_source": "particles",
+                "lambda_constraint": 1e8,
                 "violation_eps": 0.0,
                 "gp_sampling_method": "marginal",
             })

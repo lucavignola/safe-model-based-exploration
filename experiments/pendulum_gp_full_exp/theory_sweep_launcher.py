@@ -28,19 +28,17 @@ SAMPLING_MODE_CONFIGS = {
     "prior": {
         "gp_sampling_method": "rff",
         "gp_path_source": "prior",
-        "gp_sample_truncation": "recursive",
     },
     "posterior": {
         "gp_sampling_method": "rff",
         "gp_path_source": "posterior",
-        "gp_sample_truncation": "recursive",
     },
     "ts1": {
         "gp_sampling_method": "marginal",
         "gp_path_source": "posterior",
-        "gp_sample_truncation": "recursive",
     },
 }
+TRUNCATION_MODES = ("recursive", "posterior", "none", "prior")
 
 HARDWARE_CONFIGS = {
     "4090_rtx": {"gpu_type": "rtx_4090", "cpus_per_task": 10},
@@ -54,19 +52,26 @@ def build_sweep_configs(
         seeds=None,
         num_rff_features=512,
         function_norm=FUNCTION_NORM_SWEEP,
-        sampling_modes=("prior",),
+        sampling_modes=("prior", "posterior", "ts1"),
+        truncation_modes=("recursive",),
         num_offline_data=(0,),
         num_safe_offline_data=(0,),
         num_samples=1_000,
         num_elites=100,
         num_steps=5,
+        constraint_mode="penalty",
+        lambda_constraint=1e7,
+        reward_dynamics_source="particles",
+        aleatoric_noise_in_prediction=True,
+        gp_hyperparameter_updates=("freeze_after_d0",),
+        num_training_steps=1_000,
         num_evaluation_trajectories=5,
         log_gp_diagnostics=False,
         rkhs_norm_safety_factor=1.0,
         confidence_delta=0.05,
         information_gain_bound="diagonal",
 ):
-    """Builds matched hard-iCEM sweeps over the requested GP path modes.
+    """Builds matched legacy-penalty iCEM sweeps over GP path modes.
 
     ``function_norm`` is exposed as a practical confidence-width
     hyperparameter. It is not automatically a certified continuous-domain
@@ -87,6 +92,16 @@ def build_sweep_configs(
         if isinstance(sampling_modes, (list, tuple))
         else [sampling_modes]
     )
+    truncation_modes = (
+        list(truncation_modes)
+        if isinstance(truncation_modes, (list, tuple))
+        else [truncation_modes]
+    )
+    gp_hyperparameter_updates = (
+        list(gp_hyperparameter_updates)
+        if isinstance(gp_hyperparameter_updates, (list, tuple))
+        else [gp_hyperparameter_updates]
+    )
     offline_data_sweep = (
         list(num_offline_data)
         if isinstance(num_offline_data, (list, tuple))
@@ -100,13 +115,23 @@ def build_sweep_configs(
     unknown_modes = set(sampling_modes) - set(SAMPLING_MODE_CONFIGS)
     if unknown_modes:
         raise ValueError(f"Unknown sampling modes: {sorted(unknown_modes)}")
+    unknown_truncation_modes = set(truncation_modes) - set(
+        TRUNCATION_MODES
+    )
+    if unknown_truncation_modes:
+        raise ValueError(
+            "Unknown GP sample truncation modes: "
+            f"{sorted(unknown_truncation_modes)}"
+        )
     config = {
         "alg_name": ["SBSRL"],
         "project_name": [PROJECT_NAME],
         "entity_name": [ENTITY_NAME],
         "seed": list(seeds),
         "num_particles": list(particle_sweep),
-        "aleatoric_noise_in_prediction": [0],
+        "aleatoric_noise_in_prediction": [
+            int(aleatoric_noise_in_prediction)
+        ],
         "num_rff_features": [num_rff_features],
         "rff_path_scale": [1.0],
         "gp_beta_mode": ["theorem"],
@@ -114,19 +139,20 @@ def build_sweep_configs(
         "information_gain_bound": [information_gain_bound],
         "function_norm": function_norms,
         "rkhs_norm_safety_factor": [rkhs_norm_safety_factor],
-        "constraint_mode": ["hard"],
+        "constraint_mode": [constraint_mode],
         "constraint_tolerance": [1e-6],
         "constraint_failure_mode": ["recovery"],
-        "reward_dynamics_source": ["posterior_mean"],
+        "reward_dynamics_source": [reward_dynamics_source],
         "violation_eps": [0.0],
         "num_gpus": [1],
-        "num_training_steps": [0],
+        "num_training_steps": [num_training_steps],
+        "gp_hyperparameter_update": gp_hyperparameter_updates,
         "num_samples": [num_samples],
         "num_elites": [num_elites],
         "num_steps": [num_steps],
         "alpha": [0.2],
         "exponent": [0.2],
-        "lambda_constraint": [0.0],
+        "lambda_constraint": [lambda_constraint],
         "icem_horizon": [20],
         "episode_length": [50],
         "num_episodes": [10],
@@ -156,15 +182,17 @@ def build_sweep_configs(
                     continue
                 for sampling_mode in sampling_modes:
                     mode_config = SAMPLING_MODE_CONFIGS[sampling_mode]
-                    configs.append({
-                        **base_config,
-                        **mode_config,
-                        "num_offline_data": total_data,
-                        "num_safe_offline_data": safe_data,
-                        "gp_prior_condition_on_initial_data": int(
-                            total_data > 0
-                        ),
-                    })
+                    for truncation_mode in truncation_modes:
+                        configs.append({
+                            **base_config,
+                            **mode_config,
+                            "gp_sample_truncation": truncation_mode,
+                            "num_offline_data": total_data,
+                            "num_safe_offline_data": safe_data,
+                            "gp_prior_condition_on_initial_data": int(
+                                total_data > 0
+                            ),
+                        })
     if not configs:
         raise ValueError(
             "No valid D0 configurations: require "
@@ -179,7 +207,14 @@ def main(args):
         seeds=args.seeds,
         num_rff_features=args.num_rff_features,
         function_norm=args.function_norm,
-        sampling_modes=getattr(args, "sampling_modes", ["prior"]),
+        sampling_modes=getattr(
+            args,
+            "sampling_modes",
+            ["prior", "posterior", "ts1"],
+        ),
+        truncation_modes=getattr(
+            args, "gp_sample_truncation", ["recursive"]
+        ),
         num_offline_data=getattr(args, "num_offline_data", [0]),
         num_safe_offline_data=getattr(
             args, "num_safe_offline_data", [0]
@@ -187,6 +222,20 @@ def main(args):
         num_samples=args.num_samples,
         num_elites=args.num_elites,
         num_steps=args.num_steps,
+        constraint_mode=getattr(args, "constraint_mode", "penalty"),
+        lambda_constraint=getattr(args, "lambda_constraint", 1e7),
+        reward_dynamics_source=getattr(
+            args, "reward_dynamics_source", "particles"
+        ),
+        aleatoric_noise_in_prediction=bool(
+            getattr(args, "aleatoric_noise_in_prediction", 1)
+        ),
+        gp_hyperparameter_updates=getattr(
+            args,
+            "gp_hyperparameter_update",
+            ["freeze_after_d0"],
+        ),
+        num_training_steps=getattr(args, "num_training_steps", 1_000),
         num_evaluation_trajectories=getattr(
             args, "num_evaluation_trajectories", 5
         ),
@@ -266,13 +315,71 @@ if __name__ == "__main__":
         "--sampling_modes",
         choices=list(SAMPLING_MODE_CONFIGS),
         nargs="+",
-        default=["prior"],
+        default=["prior", "posterior", "ts1"],
         help=(
-            "prior: one fixed recursively truncated path bank; posterior: "
-            "new fixed posterior paths per episode recursively clipped to all "
-            "confidence tubes; ts1: stepwise marginal posterior sampling with "
-            "the same recursive clipping."
+            "prior: one fixed prior RFF path bank; posterior: new fixed "
+            "posterior RFF paths per episode; ts1: stepwise marginal "
+            "posterior sampling. Clipping is selected independently with "
+            "--gp_sample_truncation."
         ),
+    )
+    parser.add_argument(
+        "--gp_sample_truncation",
+        choices=TRUNCATION_MODES,
+        nargs="+",
+        default=["recursive"],
+        help=(
+            "recursive intersects the initial and all previous confidence "
+            "tubes; posterior clips only to the current beta*sigma_n tube; "
+            "none disables clipping; prior uses the current mean with the "
+            "initial kernel standard deviation."
+        ),
+    )
+    parser.add_argument(
+        "--constraint_mode",
+        choices=["penalty", "hard"],
+        default="penalty",
+    )
+    parser.add_argument(
+        "--lambda_constraint",
+        type=float,
+        default=1e7,
+        help="Penalty coefficient in reward-lambda*relu(cost).",
+    )
+    parser.add_argument(
+        "--reward_dynamics_source",
+        choices=["particles", "posterior_mean"],
+        default="particles",
+        help=(
+            "particles restores the legacy iCEM reward aggregation; "
+            "posterior_mean performs a separate deterministic reward rollout."
+        ),
+    )
+    parser.add_argument(
+        "--aleatoric_noise_in_prediction",
+        type=int,
+        choices=[0, 1],
+        default=1,
+        help=(
+            "Sample the learned GP likelihood scale as process noise inside "
+            "planning rollouts. The submitted experiments used 1."
+        ),
+    )
+    parser.add_argument(
+        "--gp_hyperparameter_update",
+        choices=["freeze_after_d0", "every_episode"],
+        nargs="+",
+        default=["freeze_after_d0"],
+        help=(
+            "Fit once on D0 and freeze, or refit after every accumulated-data "
+            "update. Passing both creates a matched lifecycle ablation."
+        ),
+    )
+    parser.add_argument(
+        "--num_training_steps",
+        type=int,
+        default=1_000,
+        help="Kernel-hyperparameter optimization steps at each enabled fit.",
     )
     parser.add_argument(
         "--num_offline_data",
@@ -307,6 +414,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--wandb_notes",
         type=str,
-        default="theory-sampling-M-sweep-hard-recovery-zero-tightening",
+        default="theory-sampling-M-sweep-penalty-zero-tightening",
     )
     main(parser.parse_args())
