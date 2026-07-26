@@ -43,6 +43,12 @@ class Task(NamedTuple):
 
 
 class SafeModelBasedAgent:
+    GP_HYPERPARAMETER_UPDATE_MODES = {
+        'model_default',
+        'freeze_after_d0',
+        'every_episode',
+    }
+
     def __init__(self,
                  env: BraxEnv,
                  model: StatisticalModel,
@@ -69,6 +75,7 @@ class SafeModelBasedAgent:
                  gp_sample_truncation: str = 'none',
                  aleatoric_noise_in_prediction: bool = True,
                  gp_prior_condition_on_initial_data: bool = False,
+                 gp_hyperparameter_update: str = 'model_default',
                  constraint_failure_mode: str = 'recovery',
                  num_evaluation_trajectories: int = 1,
                  log_gp_diagnostics: bool = False,
@@ -150,6 +157,25 @@ class SafeModelBasedAgent:
         self.gp_prior_condition_on_initial_data = (
             gp_prior_condition_on_initial_data
         )
+        if (
+                gp_hyperparameter_update
+                not in self.GP_HYPERPARAMETER_UPDATE_MODES
+        ):
+            raise ValueError(
+                "gp_hyperparameter_update must be one of "
+                f"{sorted(self.GP_HYPERPARAMETER_UPDATE_MODES)}, got "
+                f"{gp_hyperparameter_update!r}."
+            )
+        self.gp_hyperparameter_update = gp_hyperparameter_update
+        if isinstance(self.model, GPStatisticalModel):
+            if gp_hyperparameter_update in {
+                    'freeze_after_d0',
+                    'every_episode',
+            }:
+                # Allow the first D0 fit in both explicit modes. The
+                # freeze-after-D0 lifecycle is applied immediately after that
+                # update; every-episode leaves optimization enabled.
+                self.model.fixed_kernel_params = False
         self._fixed_prior_path_state: RFFPriorState | None = None
         if constraint_failure_mode not in {'recovery', 'raise'}:
             raise ValueError(
@@ -288,11 +314,32 @@ class SafeModelBasedAgent:
             condition_on_initial_data=condition_on_initial_data,
         )
 
-        # A fixed function-space prior requires a fixed kernel and coordinate
-        # system.  Future updates only condition this same GP on more data.
+        if (
+                getattr(
+                    self,
+                    'gp_hyperparameter_update',
+                    'model_default',
+                )
+                != 'every_episode'
+        ):
+            # A theory-aligned fixed function-space prior uses the same kernel
+            # and coordinate system for all later confidence updates.
+            self._freeze_gp_hyperparameters(model_state)
+        return model_state
+
+    def _freeze_gp_hyperparameters(
+            self,
+            model_state: ModelState,
+    ) -> None:
+        """Freezes the GP kernel and coordinates at their current values."""
+
+        if not isinstance(self.model, GPStatisticalModel):
+            raise TypeError(
+                "GP hyperparameter lifecycle controls require "
+                "GPStatisticalModel."
+            )
         self.model.fixed_kernel_params = True
         self.model.normalization_stats = model_state.model_state.data_stats
-        return model_state
 
     def _append_fixed_prior_confidence(
             self,
@@ -839,6 +886,14 @@ class SafeModelBasedAgent:
             model_state = self.train_dynamics_model(model_state=model_state,
                                                     data=data,
                                                     episode_idx=episode_idx)
+
+        if (
+                episode_idx == 0
+                and self.gp_hyperparameter_update == 'freeze_after_d0'
+        ):
+            # With D0, this freezes the just-fitted kernel. Without D0, no
+            # update occurred and this freezes the initialized prior kernel.
+            self._freeze_gp_hyperparameters(model_state)
 
         if (
                 initialize_prior

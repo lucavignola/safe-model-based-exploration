@@ -275,9 +275,12 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         beta = pred.statistical_model_state.beta
 
         if self.gp_sampling_method == "marginal":
+            # Preserve the TS1 sampler used by the submitted experiments.
+            # Here beta is an intentional uncertainty-inflation factor; it is
+            # distinct from the unit-scale RFF posterior paths.
             model_prediction = (
                 pred.mean
-                + epistemic_std
+                + beta * epistemic_std
                 * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
             )
         else:
