@@ -40,7 +40,7 @@ def experiment(
         use_precomputed_kernel_params: bool = False,
         use_function_norms: bool = False,
         num_offline_data: int = 0,
-        num_safe_offline_data: int = 1,
+        num_safe_offline_data: int = 0,
         violation_eps: float = 0.1,
         optimizer: str = 'icem',
         lambda_sigma: float = 0.0,
@@ -54,6 +54,7 @@ def experiment(
         wandb_notes: str = None,
         num_traj: int = 0,
         gp_sampling_method: str = 'marginal',
+        gp_marginal_sample_scale: float | None = None,
         num_rff_features: int = 512,
         rff_path_scale: float | None = None,
         gp_sample_truncation: str = 'none',
@@ -136,6 +137,7 @@ def experiment(
         default_task_index=default_task_index,
         actsafe_index=actsafe_index,
         gp_sampling_method=gp_sampling_method,
+        gp_marginal_sample_scale=gp_marginal_sample_scale,
         num_rff_features=num_rff_features,
         rff_path_scale=rff_path_scale,
         gp_sample_truncation=gp_sample_truncation,
@@ -154,7 +156,7 @@ def experiment(
         wandb_notes=wandb_notes  # Add to config for visibility
     )
     configs['kernel_lifecycle_theory_aligned'] = (
-        gp_hyperparameter_update != 'every_episode'
+        gp_hyperparameter_update not in {'every', 'every_episode'}
     )
     import jax
     jax.config.update("jax_enable_x64", True)
@@ -198,19 +200,30 @@ def experiment(
         # random points with a local design around the known safe equilibrium.
         offline_data_sampler = CartPoleOfflineData(action_repeat=action_repeat,
                                                    predict_difference=True)
-        key_random_data, key_safe_data = jr.split(key_offline_data)
-        num_random_offline_data = (
-            num_offline_data - num_safe_offline_data
-        )
-        random_offline_data = offline_data_sampler.sample(
-            key=key_random_data,
-            num_samples=num_random_offline_data,
-            max_abs_lin_position=1.0,
-            max_abs_ang_velocity=5.0,
-            max_abs_lin_velocity=5.0,
-        )
-        offline_data_parts = []
-        if num_safe_offline_data > 0:
+        if num_safe_offline_data == 0:
+            # Preserve the exact D0 from the submitted implementation,
+            # including its PRNG stream. Merely splitting key_offline_data
+            # changes every random point and invalidates matched ablations.
+            offline_data = offline_data_sampler.sample(
+                key=key_offline_data,
+                num_samples=num_offline_data,
+                max_abs_lin_position=1.0,
+                max_abs_ang_velocity=5.0,
+                max_abs_lin_velocity=5.0,
+            )
+        else:
+            key_random_data, key_safe_data = jr.split(key_offline_data)
+            num_random_offline_data = (
+                num_offline_data - num_safe_offline_data
+            )
+            random_offline_data = offline_data_sampler.sample(
+                key=key_random_data,
+                num_samples=num_random_offline_data,
+                max_abs_lin_position=1.0,
+                max_abs_ang_velocity=5.0,
+                max_abs_lin_velocity=5.0,
+            )
+            offline_data_parts = []
             # Keep one exact transition at the stable downward equilibrium in
             # the data passed to model.update().  Setting model_state.history
             # alone is insufficient because GP training replaces that history
@@ -221,22 +234,22 @@ def experiment(
                 inputs=equilibrium_input[None, :],
                 outputs=equilibrium_output[None, :],
             ))
-        if num_safe_offline_data > 1:
-            offline_data_parts.append(
-                offline_data_sampler.sample_near_downward_equilibrium(
-                    key=key_safe_data,
-                    num_samples=num_safe_offline_data - 1,
+            if num_safe_offline_data > 1:
+                offline_data_parts.append(
+                    offline_data_sampler.sample_near_downward_equilibrium(
+                        key=key_safe_data,
+                        num_samples=num_safe_offline_data - 1,
+                    )
                 )
+            offline_data_parts.append(random_offline_data)
+            offline_data = Data(
+                inputs=jnp.concatenate(
+                    [part.inputs for part in offline_data_parts], axis=0
+                ),
+                outputs=jnp.concatenate(
+                    [part.outputs for part in offline_data_parts], axis=0
+                ),
             )
-        offline_data_parts.append(random_offline_data)
-        offline_data = Data(
-            inputs=jnp.concatenate(
-                [part.inputs for part in offline_data_parts], axis=0
-            ),
-            outputs=jnp.concatenate(
-                [part.outputs for part in offline_data_parts], axis=0
-            ),
-        )
     else:
         # Use trajectory-based data collection
         offline_data_traj = CartPoleTrajectoryOfflineData(action_repeat=1)
@@ -249,7 +262,9 @@ def experiment(
 
     env = CartPoleEnv()
 
-    if (
+    if gp_hyperparameter_update == 'none':
+        num_training_steps = constant_schedule(0)
+    elif (
             use_precomputed_kernel_params
             and gp_hyperparameter_update == 'model_default'
     ):
@@ -424,6 +439,7 @@ def experiment(
         'use_optimism': use_optimism,
         'optimizer': optimizer,
         'gp_sampling_method': gp_sampling_method,
+        'gp_marginal_sample_scale': gp_marginal_sample_scale,
         'num_rff_features': num_rff_features,
         'rff_path_scale': rff_path_scale,
         'gp_sample_truncation': gp_sample_truncation,
@@ -578,6 +594,7 @@ def main(args):
         wandb_notes=args.wandb_notes,
         num_traj=args.num_traj,
         gp_sampling_method=args.gp_sampling_method,
+        gp_marginal_sample_scale=args.gp_marginal_sample_scale,
         num_rff_features=args.num_rff_features,
         rff_path_scale=args.rff_path_scale,
         gp_sample_truncation=args.gp_sample_truncation,
@@ -662,7 +679,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--num_safe_offline_data',
         type=int,
-        default=1,
+        default=0,
         help=(
             'Number of D0 points reserved for the known safe downward region, '
             'including one exact equilibrium transition.'
@@ -691,6 +708,16 @@ if __name__ == '__main__':
     parser.add_argument('--gp_sampling_method', type=str, default='marginal',
                         choices=['marginal', 'rff'],
                         help='Epistemic dynamics sampler used inside iCEM')
+    parser.add_argument(
+        '--gp_marginal_sample_scale',
+        type=float,
+        default=None,
+        help=(
+            'TS1 epistemic sample scale. Use 3 for the submitted heuristic '
+            'or 1 for an uninflated GP marginal draw. If omitted, the GP beta '
+            'is used for backward compatibility.'
+        ),
+    )
     parser.add_argument('--num_rff_features', type=int, default=512,
                         help='Number of spectral frequencies per GP output in RFF mode')
     parser.add_argument('--rff_path_scale', type=float, default=None,
@@ -728,7 +755,14 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--gp_hyperparameter_update',
-        choices=['model_default', 'freeze_after_d0', 'every_episode'],
+        choices=[
+            'model_default',
+            'none',
+            'd0',
+            'every',
+            'freeze_after_d0',
+            'every_episode',
+        ],
         default='model_default',
         help=(
             'model_default preserves the model construction; '

@@ -55,6 +55,7 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                  predict_difference: bool = True,
                  gp_sampling_method: str = "marginal",
                  gp_path_source: str = "posterior",
+                 marginal_sample_scale: float | None = None,
                  rff_path_scale: float | None = None,
                  gp_sample_truncation: str = "none",
                  ):
@@ -80,6 +81,12 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
                 "Whole-run prior paths require gp_sampling_method='rff'."
             )
         self.gp_path_source = gp_path_source
+        if marginal_sample_scale is not None and marginal_sample_scale < 0:
+            raise ValueError(
+                "marginal_sample_scale must be non-negative, got "
+                f"{marginal_sample_scale}."
+            )
+        self.marginal_sample_scale = marginal_sample_scale
         if rff_path_scale is not None and rff_path_scale < 0:
             raise ValueError(
                 f"rff_path_scale must be non-negative, got {rff_path_scale}."
@@ -275,12 +282,17 @@ class ExplorationDynamics(Dynamics, Generic[ModelState]):
         beta = pred.statistical_model_state.beta
 
         if self.gp_sampling_method == "marginal":
-            # Preserve the TS1 sampler used by the submitted experiments.
-            # Here beta is an intentional uncertainty-inflation factor; it is
-            # distinct from the unit-scale RFF posterior paths.
+            # Keep the TS1 sampling scale independent of the confidence
+            # coefficient used for truncation.  The submitted implementation
+            # used scale=beta=3; a true marginal GP draw uses scale=1.
+            sample_scale = (
+                beta
+                if self.marginal_sample_scale is None
+                else self.marginal_sample_scale
+            )
             model_prediction = (
                 pred.mean
-                + beta * epistemic_std
+                + sample_scale * epistemic_std
                 * jr.normal(key=key_sample_x_next, shape=pred.mean.shape)
             )
         else:

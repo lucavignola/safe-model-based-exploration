@@ -45,8 +45,19 @@ class Task(NamedTuple):
 class SafeModelBasedAgent:
     GP_HYPERPARAMETER_UPDATE_MODES = {
         'model_default',
+        'none',
+        'd0',
+        'every',
         'freeze_after_d0',
         'every_episode',
+    }
+    GP_HYPERPARAMETER_UPDATE_ALIASES = {
+        'none': 'none',
+        'd0': 'freeze_after_d0',
+        'every': 'every_episode',
+        'model_default': 'model_default',
+        'freeze_after_d0': 'freeze_after_d0',
+        'every_episode': 'every_episode',
     }
 
     def __init__(self,
@@ -70,6 +81,7 @@ class SafeModelBasedAgent:
                  optimizer: str = 'icem',  # can be 'icem' or 'ipopt'
                  gp_sampling_method: str = 'marginal',
                  gp_path_source: str = 'posterior',
+                 gp_marginal_sample_scale: float | None = None,
                  num_rff_features: int = 512,
                  rff_path_scale: float | None = None,
                  gp_sample_truncation: str = 'none',
@@ -129,6 +141,15 @@ class SafeModelBasedAgent:
                 "Whole-run prior paths require gp_sampling_method='rff'."
             )
         self.gp_path_source = gp_path_source
+        if (
+                gp_marginal_sample_scale is not None
+                and gp_marginal_sample_scale < 0
+        ):
+            raise ValueError(
+                "gp_marginal_sample_scale must be non-negative, got "
+                f"{gp_marginal_sample_scale}."
+            )
+        self.gp_marginal_sample_scale = gp_marginal_sample_scale
         self.num_rff_features = num_rff_features
         if rff_path_scale is not None and rff_path_scale < 0:
             raise ValueError(
@@ -166,9 +187,15 @@ class SafeModelBasedAgent:
                 f"{sorted(self.GP_HYPERPARAMETER_UPDATE_MODES)}, got "
                 f"{gp_hyperparameter_update!r}."
             )
-        self.gp_hyperparameter_update = gp_hyperparameter_update
+        self.gp_hyperparameter_update_requested = gp_hyperparameter_update
+        self.gp_hyperparameter_update = (
+            self.GP_HYPERPARAMETER_UPDATE_ALIASES[
+                gp_hyperparameter_update
+            ]
+        )
         if isinstance(self.model, GPStatisticalModel):
-            if gp_hyperparameter_update in {
+            if self.gp_hyperparameter_update in {
+                    'none',
                     'freeze_after_d0',
                     'every_episode',
             }:
@@ -213,6 +240,11 @@ class SafeModelBasedAgent:
             predict_difference=self.predict_difference,
             gp_sampling_method=self.gp_sampling_method,
             gp_path_source=self.gp_path_source,
+            marginal_sample_scale=getattr(
+                self,
+                'gp_marginal_sample_scale',
+                None,
+            ),
             rff_path_scale=self.rff_path_scale,
             gp_sample_truncation=self.gp_sample_truncation,
             aleatoric_noise_in_prediction=(
@@ -492,6 +524,52 @@ class SafeModelBasedAgent:
             ),
         }
 
+    def _gp_state_diagnostic_metrics(
+            self,
+            model_state: ModelState,
+            states: chex.Array,
+            actions: chex.Array,
+    ) -> dict[str, float]:
+        """Small GP summary that is available for every sampling mode."""
+
+        if not isinstance(self.model, GPStatisticalModel):
+            return {'gp/diagnostics_enabled': 1.0}
+
+        gp_state = model_state.model_state
+        state_actions = jnp.concatenate([states, actions], axis=-1)
+        epistemic_stds = jax.vmap(
+            lambda z: self.model(z, model_state).epistemic_std
+        )(state_actions)
+        beta = jnp.asarray(model_state.beta)
+        metrics = {
+            'gp/diagnostics_enabled': 1.0,
+            'gp/num_training_points': float(gp_state.history.inputs.shape[0]),
+            'gp/beta_max': float(jnp.max(beta)),
+            'gp/visited_epistemic_std_mean': float(
+                jnp.mean(epistemic_stds)
+            ),
+            'gp/visited_epistemic_std_max': float(
+                jnp.max(epistemic_stds)
+            ),
+        }
+        pseudo_length_scale = gp_state.params.get(
+            'pseudo_length_scale'
+        )
+        if pseudo_length_scale is not None:
+            length_scale = jax.nn.softplus(pseudo_length_scale)
+            metrics.update({
+                'gp/kernel_length_scale_min': float(
+                    jnp.min(length_scale)
+                ),
+                'gp/kernel_length_scale_mean': float(
+                    jnp.mean(length_scale)
+                ),
+                'gp/kernel_length_scale_max': float(
+                    jnp.max(length_scale)
+                ),
+            })
+        return metrics
+
     def train_dynamics_model(self,
                              model_state: ModelState,
                              data: Data,
@@ -766,7 +844,10 @@ class SafeModelBasedAgent:
                 step=i,
                 context="training rollout",
             )
-            print(f'Step {i}: reward is {optimizer_state.best_reward}')
+            print(
+                f'Step {i}: planner objective is '
+                f'{optimizer_state.best_reward}'
+            )
             planning_costs.append(optimizer_state.best_cost)
             planning_feasible.append(optimizer_state.best_feasible)
             planning_any_feasible.append(optimizer_state.any_feasible)
@@ -889,7 +970,10 @@ class SafeModelBasedAgent:
 
         if (
                 episode_idx == 0
-                and self.gp_hyperparameter_update == 'freeze_after_d0'
+                and self.gp_hyperparameter_update in {
+                    'none',
+                    'freeze_after_d0',
+                }
         ):
             # With D0, this freezes the just-fitted kernel. Without D0, no
             # update occurred and this freezes the initialized prior kernel.
@@ -986,6 +1070,11 @@ class SafeModelBasedAgent:
                     actions=exploration_actions,
                 ))
             if self.log_gp_diagnostics:
+                metrics.update(self._gp_state_diagnostic_metrics(
+                    model_state=model_state,
+                    states=exploration_states.obs[:-1],
+                    actions=exploration_actions,
+                ))
                 metrics.update(self._visited_gp_calibration_metrics(
                     model_state=model_state,
                     states=exploration_states.obs[:-1],

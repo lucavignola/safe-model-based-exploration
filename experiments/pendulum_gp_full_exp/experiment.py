@@ -53,6 +53,7 @@ def experiment(
         actsafe_index: int = -1,
         wandb_notes: str = None,
         gp_sampling_method: str = 'marginal',
+        gp_marginal_sample_scale: float | None = None,
         num_rff_features: int = 512,
         rff_path_scale: float | None = None,
         gp_sample_truncation: str = 'none',
@@ -182,21 +183,41 @@ def experiment(
         )
 
     if num_offline_data > 0:
-        random_key, safe_key = jr.split(offline_data_key)
-        num_random_offline_data = (
-            num_offline_data - num_safe_offline_data
-        )
-        data_parts = []
-        if num_random_offline_data:
-            data_parts.append(sample_repeated_data(
-                PendulumOfflineData(
-                    env=env, max_velocity=max_abs_velocity
+        if num_safe_offline_data == 0:
+            # Exact D0 construction and PRNG stream from the clean baseline.
+            # The optional safe-design path below must not perturb this case.
+            offline_data_gen = PendulumOfflineData(
+                env=env, max_velocity=max_abs_velocity
+            )
+            transitions = offline_data_gen.sample_transitions(
+                key=offline_data_key,
+                num_samples=num_offline_data,
+            )
+            offline_data = Data(
+                inputs=jnp.concatenate(
+                    [transitions.observation, transitions.action],
+                    axis=-1,
                 ),
-                random_key,
-                num_random_offline_data,
-                safe=False,
-            ))
-        if num_safe_offline_data:
+                outputs=(
+                    transitions.next_observation
+                    - transitions.observation
+                ),
+            )
+        else:
+            random_key, safe_key = jr.split(offline_data_key)
+            num_random_offline_data = (
+                num_offline_data - num_safe_offline_data
+            )
+            data_parts = []
+            if num_random_offline_data:
+                data_parts.append(sample_repeated_data(
+                    PendulumOfflineData(
+                        env=env, max_velocity=max_abs_velocity
+                    ),
+                    random_key,
+                    num_random_offline_data,
+                    safe=False,
+                ))
             data_parts.append(sample_repeated_data(
                 PendulumSafeOfflineData(
                     env=env, max_velocity=max_abs_velocity
@@ -205,14 +226,14 @@ def experiment(
                 num_safe_offline_data,
                 safe=True,
             ))
-        offline_data = Data(
-            inputs=jnp.concatenate(
-                [data_part.inputs for data_part in data_parts]
-            ),
-            outputs=jnp.concatenate(
-                [data_part.outputs for data_part in data_parts]
-            ),
-        )
+            offline_data = Data(
+                inputs=jnp.concatenate(
+                    [data_part.inputs for data_part in data_parts]
+                ),
+                outputs=jnp.concatenate(
+                    [data_part.outputs for data_part in data_parts]
+                ),
+            )
     else:
         offline_data = None
 
@@ -256,6 +277,7 @@ def experiment(
         default_task_index=default_task_index,
         actsafe_index=actsafe_index,
         gp_sampling_method=gp_sampling_method,
+        gp_marginal_sample_scale=gp_marginal_sample_scale,
         num_rff_features=num_rff_features,
         rff_path_scale=rff_path_scale,
         gp_sample_truncation=gp_sample_truncation,
@@ -274,7 +296,12 @@ def experiment(
         wandb_notes=wandb_notes  # Add to config for visibility
     )
     configs['kernel_lifecycle_theory_aligned'] = (
-        gp_hyperparameter_update != 'every_episode'
+        gp_hyperparameter_update not in {'every', 'every_episode'}
+    )
+
+    effective_num_training_steps = (
+        0 if gp_hyperparameter_update == 'none'
+        else num_training_steps
     )
 
     if gp_beta_mode == 'theorem':
@@ -315,7 +342,9 @@ def experiment(
             fixed_kernel_params=True,
             normalization_stats=fixed_normalization_stats,
             normalize=False,
-            num_training_steps=constant_schedule(num_training_steps),
+            num_training_steps=constant_schedule(
+                effective_num_training_steps
+            ),
             lr_rate=1e-2,
             weight_decay=1e-3,
         )
@@ -332,7 +361,9 @@ def experiment(
             beta=None,
             f_norm_bound=jnp.ones(env.observation_size) * function_norm,
             delta=confidence_delta,
-            num_training_steps=constant_schedule(num_training_steps),
+            num_training_steps=constant_schedule(
+                effective_num_training_steps
+            ),
             lr_rate=1e-2,
             weight_decay=1e-3,
         )
@@ -347,7 +378,9 @@ def experiment(
             output_stds=1e-3 * jnp.ones(shape=(env.observation_size,)),
             logging_wandb=log_wandb,
             beta=jnp.ones(3) * beta,
-            num_training_steps=constant_schedule(num_training_steps),
+            num_training_steps=constant_schedule(
+                effective_num_training_steps
+            ),
             lr_rate=1e-2,
             weight_decay=1e-3,
         )
@@ -436,6 +469,7 @@ def experiment(
         'use_pessimism': use_pessimism,
         'use_optimism': use_optimism,
         'gp_sampling_method': gp_sampling_method,
+        'gp_marginal_sample_scale': gp_marginal_sample_scale,
         'num_rff_features': num_rff_features,
         'rff_path_scale': rff_path_scale,
         'gp_sample_truncation': gp_sample_truncation,
@@ -593,6 +627,7 @@ def main(args):
         default_task_index=args.default_task_index,
         actsafe_index=args.actsafe_index,
         gp_sampling_method=args.gp_sampling_method,
+        gp_marginal_sample_scale=args.gp_marginal_sample_scale,
         num_rff_features=args.num_rff_features,
         rff_path_scale=args.rff_path_scale,
         gp_sample_truncation=args.gp_sample_truncation,
@@ -705,6 +740,16 @@ if __name__ == '__main__':
     parser.add_argument('--gp_sampling_method', type=str, default='marginal',
                         choices=['marginal', 'rff'],
                         help='Epistemic dynamics sampler used inside iCEM')
+    parser.add_argument(
+        '--gp_marginal_sample_scale',
+        type=float,
+        default=None,
+        help=(
+            'TS1 epistemic sample scale. Use 3 for the submitted heuristic '
+            'or 1 for an uninflated GP marginal draw. If omitted, the GP beta '
+            'is used for backward compatibility.'
+        ),
+    )
     parser.add_argument('--num_rff_features', type=int, default=512,
                         help='Number of spectral frequencies per GP output in RFF mode')
     parser.add_argument('--rff_path_scale', type=float, default=None,
@@ -742,7 +787,14 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--gp_hyperparameter_update',
-        choices=['model_default', 'freeze_after_d0', 'every_episode'],
+        choices=[
+            'model_default',
+            'none',
+            'd0',
+            'every',
+            'freeze_after_d0',
+            'every_episode',
+        ],
         default='model_default',
         help=(
             'model_default preserves the model construction; '

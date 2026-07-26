@@ -63,6 +63,7 @@ def build_sweep_configs(
         lambda_constraint=1e7,
         reward_dynamics_source="particles",
         aleatoric_noise_in_prediction=True,
+        gp_marginal_sample_scale=3.0,
         gp_hyperparameter_updates=("freeze_after_d0",),
         num_training_steps=1_000,
         num_evaluation_trajectories=5,
@@ -102,6 +103,16 @@ def build_sweep_configs(
         if isinstance(gp_hyperparameter_updates, (list, tuple))
         else [gp_hyperparameter_updates]
     )
+    lifecycle_aliases = {
+        "none": "none",
+        "d0": "freeze_after_d0",
+        "every": "every_episode",
+        "freeze_after_d0": "freeze_after_d0",
+        "every_episode": "every_episode",
+    }
+    gp_hyperparameter_updates = [
+        lifecycle_aliases[mode] for mode in gp_hyperparameter_updates
+    ]
     offline_data_sweep = (
         list(num_offline_data)
         if isinstance(num_offline_data, (list, tuple))
@@ -132,6 +143,7 @@ def build_sweep_configs(
         "aleatoric_noise_in_prediction": [
             int(aleatoric_noise_in_prediction)
         ],
+        "gp_marginal_sample_scale": [gp_marginal_sample_scale],
         "num_rff_features": [num_rff_features],
         "rff_path_scale": [1.0],
         "gp_beta_mode": ["theorem"],
@@ -234,6 +246,9 @@ def main(args):
             args,
             "gp_hyperparameter_update",
             ["freeze_after_d0"],
+        ),
+        gp_marginal_sample_scale=getattr(
+            args, "gp_marginal_sample_scale", 3.0
         ),
         num_training_steps=getattr(args, "num_training_steps", 1_000),
         num_evaluation_trajectories=getattr(
@@ -367,7 +382,13 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--gp_hyperparameter_update",
-        choices=["freeze_after_d0", "every_episode"],
+        choices=[
+            "none",
+            "d0",
+            "every",
+            "freeze_after_d0",
+            "every_episode",
+        ],
         nargs="+",
         default=["freeze_after_d0"],
         help=(
@@ -380,6 +401,16 @@ if __name__ == "__main__":
         type=int,
         default=1_000,
         help="Kernel-hyperparameter optimization steps at each enabled fit.",
+    )
+    parser.add_argument(
+        "--gp_marginal_sample_scale",
+        type=float,
+        default=3.0,
+        help=(
+            "TS1 epistemic scale: 3 reproduces the submitted heuristic; "
+            "1 is an uninflated GP marginal draw. This does not change the "
+            "beta used by truncation."
+        ),
     )
     parser.add_argument(
         "--num_offline_data",
